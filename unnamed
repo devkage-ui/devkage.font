@@ -1,1 +1,1588 @@
-local _a=(getgenv and getgenv())or _G if _a.DevKageVoidSuite and type(_a.DevKageVoidSuite)==string.char(116,97,98,108,101)and type(_a.DevKageVoidSuite.Unload)==string.char(102,117,110,99,116,105,111,110)then pcall(function()_a.DevKageVoidSuite:Unload(string.char(114,101,108,111,97,100))end)end local _b={Name=string.char(68,101,118,75,97,103,101,32,86,111,105,100,32,83,117,105,116,101),Version=string.char(49,46,48,46,48),Running=true,Ready=false,Connections={},BoundSteps={},AccentObjects={},VelocityCache=setmetatable({},{__mode=string.char(107)}),}_a.DevKageVoidSuite=_b _b.Services={Players=game:GetService(string.char(80,108,97,121,101,114,115)),RunService=game:GetService(string.char(82,117,110,83,101,114,118,105,99,101)),UserInputService=game:GetService(string.char(85,115,101,114,73,110,112,117,116,83,101,114,118,105,99,101)),TweenService=game:GetService(string.char(84,119,101,101,110,83,101,114,118,105,99,101)),HttpService=game:GetService(string.char(72,116,116,112,83,101,114,118,105,99,101)),Stats=game:GetService(string.char(83,116,97,116,115)),Workspace=game:GetService(string.char(87,111,114,107,115,112,97,99,101)),CoreGui=game:GetService(string.char(67,111,114,101,71,117,105)),}_b.Player=_b.Services.Players.LocalPlayer _b.Defaults={Enabled=false,VoidKey=string.char(86),SpinKey=string.char(66),AttackTime=0.85,HideTime=0.30,RandomTiming=true,TimingVariance=0.18,VoidMode=string.char(68,101,101,112),VoidDepth=250000,VoidRange=9000,ExtremeScale=1750000000,VelocityNoise=false,VelocityNoiseAmount=2500,VoidPrediction=true,PredictionMultiplier=1.20,PredictionSmoothing=0.58,PredictionMaxLead=0.35,PingAssist=true,PingFactor=1.00,ProjectileAssist=true,ProjectileSpeed=3000,MaxPredictionStuds=18,RespectOtherMovement=true,AutoRecover=true,RespawnProof=true,SpinEnabled=false,SpinMode=string.char(83,112,105,110),SpinDirection=string.char(82,105,103,104,116),SpinSpeed=720,SpinRange=180,JitterInterval=0.08,RandomInterval=0.12,PitchMode=string.char(78,111,110,101),PitchAmount=45,RollMode=string.char(78,111,110,101),RollAmount=25,SpinOnlyWhileVoid=false,CameraSafe=true,DisableAutoRotate=true,SyncWithDevKage=true,FallbackUiKey=string.char(82,105,103,104,116,65,108,116),SaveSettings=true,ShowStatus=true,}_b.Config={}for _c,_d in pairs(_b.Defaults)do _b.Config[_c]=_d end _b.State={Phase=string.char(97,116,116,97,99,107),PhaseStarted=0,PhaseDuration=0,LastRoot=nil,Snap=nil,VisibleCF=nil,VisibleLV=Vector3.zero,VisibleAV=Vector3.zero,SmoothedSelfVelocity=Vector3.zero,LastVisiblePosition=nil,LastVisibleSample=0,SpinAngle=0,RollAngle=0,JitterSign=1,JitterNext=0,RandomYaw=0,RandomNext=0,SavedAutoRotate=nil,AutoRotateHumanoid=nil,FighterController=nil,FighterSource=string.char(99,104,97,114,97,99,116,101,114),LastError=nil,LastStatus=string.char(98,111,111,116,105,110,103),FallbackVisible=true,MainMenuLinked=false,GuiOpen=false,LastThemeUpdate=0,LastUiSync=0,}_b.ConfigFolder=string.char(68,101,118,75,97,103,101,95,67,111,110,102,105,103,115)_b.ConfigPath=_b.ConfigFolder..string.char(47,95,118,111,105,100,95,115,117,105,116,101,95,99,111,109,112,97,110,105,111,110,46,106,115,111,110)function _b:Track(_e)if _e then self.Connections[#self.Connections+1]=_e end return _e end function _b:Bind(_f,_g,_h)pcall(function()self.Services.RunService:UnbindFromRenderStep(_f)end)local _i=pcall(function()self.Services.RunService:BindToRenderStep(_f,_g,_h)end)if _i then self.BoundSteps[_f]=true end return _i end function _b:UnbindAll()for _f in pairs(self.BoundSteps)do pcall(function()self.Services.RunService:UnbindFromRenderStep(_f)end)end self.BoundSteps={}end function _b:DisconnectAll()for _j=#self.Connections,1,-1 do local _k=self.Connections[_j]self.Connections[_j]=nil pcall(function()_k:Disconnect()end)end end function _b:MergeConfig(_l)if type(_l)~=string.char(116,97,98,108,101)then return end for _c,_m in pairs(self.Defaults)do local _n=_l[_c]if _n~=nil and type(_n)==type(_m)then self.Config[_c]=_n end end end function _b:LoadConfig()if not(isfile and readfile)then return false end local _i,_o=pcall(function()if not isfile(self.ConfigPath)then return nil end local _p=readfile(self.ConfigPath)if type(_p)~=string.char(115,116,114,105,110,103)or _p==""then return nil end return self.Services.HttpService:JSONDecode(_p)end)if _i and type(_o)==string.char(116,97,98,108,101)then self:MergeConfig(_o)return true end return false end function _b:SaveConfig()if not self.Config.SaveSettings then return end if not(writefile and self.Services.HttpService)then return end pcall(function()if makefolder and isfolder and not isfolder(self.ConfigFolder)then makefolder(self.ConfigFolder)elseif makefolder and not isfolder then pcall(makefolder,self.ConfigFolder)end writefile(self.ConfigPath,self.Services.HttpService:JSONEncode(self.Config))end)end function _b:ResetConfig()for _c,_d in pairs(self.Defaults)do self.Config[_c]=_d end self:SaveConfig()if self.RefreshAllControls then self:RefreshAllControls()end end function _b:GetPing()local _q=0 pcall(function()local _r=self.Services.Stats.Network local _s=_r and _r.ServerStatsItem and _r.ServerStatsItem[string.char(68,97,116,97,32,80,105,110,103)]if _s then _q=(tonumber(_s:GetValue())or 0)/1000 end end)return math.clamp(_q,0,1.5)end function _b:GetCharacter()local _t=self.Player or self.Services.Players.LocalPlayer return _t and _t.Character or nil end function _b:GetHumanoid()local _u=self:GetCharacter()return _u and _u:FindFirstChildOfClass(string.char(72,117,109,97,110,111,105,100))or nil end function _b:RefreshFighterController()local _t=self.Player if not _t then return end local _v=_t:FindFirstChild(string.char(80,108,97,121,101,114,83,99,114,105,112,116,115))local _w=_v and _v:FindFirstChild(string.char(67,111,110,116,114,111,108,108,101,114,115))local module=_w and _w:FindFirstChild(string.char(70,105,103,104,116,101,114,67,111,110,116,114,111,108,108,101,114))if not module or not module:IsA(string.char(77,111,100,117,108,101,83,99,114,105,112,116))then return end local _x=_a.InstanceRequire local _i,_y if type(_x)==string.char(102,117,110,99,116,105,111,110)then _i,_y=pcall(_x,module,2)else _i,_y=pcall(require,module)end if _i and type(_y)==string.char(116,97,98,108,101)then self.State.FighterController=_y end end function _b:GetRoot()local _y=self.State.FighterController if _y and _y.LocalFighter then local _z=_y.LocalFighter.Entity local _A=_z and _z.RootPart if _A and typeof(_A)==string.char(73,110,115,116,97,110,99,101)and _A:IsA(string.char(66,97,115,101,80,97,114,116))and _A.Parent then self.State.FighterSource=string.char(102,105,103,104,116,101,114)return _A end end local _u=self:GetCharacter()local _A=_u and _u:FindFirstChild(string.char(72,117,109,97,110,111,105,100,82,111,111,116,80,97,114,116))if _A and _A:IsA(string.char(66,97,115,101,80,97,114,116))then self.State.FighterSource=string.char(99,104,97,114,97,99,116,101,114)return _A end return nil end function _b:IsAlive()local _B=self:GetHumanoid()local _A=self:GetRoot()return _B~=nil and _B.Health>0 and _A~=nil end function _b:ExternalMovementBusy()if not self.Config.RespectOtherMovement then return false end if _a.InstanceUndergroundEnabled==true then return true end if rawget(_G,string.char(107,101,121,104,101,108,100,99,102,114,97,109,101))==true then return true end if rawget(_G,string.char(107,101,121,104,101,108,100,99,102,114,97,109,101,102,108,121))==true then return true end if _a.__DEVKAGE_LATE_BOOT_WAITING==true then return true end return false end function _b:RandDuration(_C)_C=math.max(tonumber(_C)or 0.2,0.03)if not self.Config.RandomTiming then return _C end local _D=math.clamp(tonumber(self.Config.TimingVariance)or 0,0,0.9)local _E=_C*(1-_D)local _F=_C*(1+_D)return _E+math.random()*(_F-_E)end function _b:SetPhase(_H)self.State.Phase=_H self.State.PhaseStarted=os.clock()if _H==string.char(104,105,100,101)then self.State.PhaseDuration=self:RandDuration(self.Config.HideTime)else self.State.PhaseDuration=self:RandDuration(self.Config.AttackTime)end end function _b:ResetVoidState(_I)if _I~=false then self:RestoreLocal(true)end self.State.Snap=nil self.State.VisibleCF=nil self.State.LastVisiblePosition=nil self.State.LastVisibleSample=0 self.State.SmoothedSelfVelocity=Vector3.zero self:SetPhase(string.char(97,116,116,97,99,107))end function _b:SampleVisibleRoot(_A,_J)if not _A then return end local _K=os.clock()local _L=_A.Position local _M=self.State.LastVisiblePosition local _N=self.State.LastVisibleSample local _O=_A.AssemblyLinearVelocity if _M and _N>0 then local _P=_K-_N if _P>0.001 and _P<0.25 then local _Q=(_L-_M)/_P if _Q.Magnitude<600 then _O=_O:Lerp(_Q,0.45)end end end local _R=math.clamp(tonumber(self.Config.PredictionSmoothing)or 0.58,0,0.98)self.State.SmoothedSelfVelocity=self.State.SmoothedSelfVelocity:Lerp(_O,1-_R)self.State.LastVisiblePosition=_L self.State.LastVisibleSample=_K self.State.VisibleCF=_A.CFrame self.State.VisibleLV=_A.AssemblyLinearVelocity self.State.VisibleAV=_A.AssemblyAngularVelocity end function _b:AdvanceVisiblePrediction(_J)if not self.Config.VoidPrediction then return end local _S=self.State.VisibleCF if not _S then return end local _T=self.State.SmoothedSelfVelocity local _U=math.max(tonumber(self.Config.MaxPredictionStuds)or 18,0)local _V=_T*math.max(_J or 0,0)*math.max(tonumber(self.Config.PredictionMultiplier)or 1,0)if _V.Magnitude>_U and _V.Magnitude>0 then _V=_V.Unit*_U end self.State.VisibleCF=_S+_V end function _b:GetVisibleCF(_A)return self.State.VisibleCF or(_A and _A.CFrame)or CFrame.new()end function _b:GetVisibleOrigin()local _A=self:GetRoot()local _S=self:GetVisibleCF(_A)return _S.Position end function _b:BuildVoidCFrame(_A)local _W=self:GetVisibleCF(_A)local _t=_W.Position local _X=self.Config.VoidMode local _Y=math.max(tonumber(self.Config.VoidRange)or 9000,50)local _Z=math.max(tonumber(self.Config.VoidDepth)or 250000,500)if _X==string.char(82,97,110,100,111,109)then _t=Vector3.new(math.random(-math.floor(_Y),math.floor(_Y)),-_Z,math.random(-math.floor(_Y),math.floor(_Y)))elseif _X==string.char(69,120,116,114,101,109,101)then local _aa=math.clamp(tonumber(self.Config.ExtremeScale)or 1750000000,100000,2000000000)local function _ba()local _ca=math.random(math.floor(_aa*0.68),math.floor(_aa))return math.random(0,1)==0 and-_ca or _ca end _t=Vector3.new(_ba(),_ba(),_ba())elseif _X==string.char(83,107,121)then _t=Vector3.new(_t.X,_Z,_t.Z)else _t=Vector3.new(_t.X,-_Z,_t.Z)end local _da,_ea,_da=_W:ToOrientation()return CFrame.new(_t)*CFrame.Angles(0,_ea,0)end function _b:ApplyVoidPulse(_A,_J)if not _A or not _A.Parent then return end if not self.State.Snap or self.State.Snap._A~=_A then self.State.Snap={_A=_A,_S=self:GetVisibleCF(_A),lv=_A.AssemblyLinearVelocity,av=_A.AssemblyAngularVelocity,}else self.State.Snap._S=self:GetVisibleCF(_A)self.State.Snap.lv=self.State.VisibleLV self.State.Snap.av=self.State.VisibleAV end self:AdvanceVisiblePrediction(_J)self.State.Snap._S=self:GetVisibleCF(_A)local _fa=self:BuildVoidCFrame(_A)local _ga=self:GetSpinRotation(_J,true)if _ga then _fa=_fa*_ga end pcall(function()_A.CFrame=_fa if self.Config.VelocityNoise then local _ca=math.floor(math.max(tonumber(self.Config.VelocityNoiseAmount)or 2500,0))_A.AssemblyLinearVelocity=Vector3.new(math.random(-_ca,_ca),math.random(-_ca,_ca),math.random(-_ca,_ca))end end)end function _b:RestoreLocal(_ha)local _ia=self.State.Snap if not _ia then return end local _A=_ia._A if not _A or not _A.Parent then self.State.Snap=nil return end pcall(function()local _ja=self.State.VisibleCF or _ia._S if _ja then _A.CFrame=_ja end if _ia.lv then _A.AssemblyLinearVelocity=_ia.lv end if _ia.av then _A.AssemblyAngularVelocity=_ia.av end end)if _ha then self.State.Snap=nil end end function _b:UpdateVoid(_J)if not self.Config.Enabled then if self.State.Snap then self:RestoreLocal(true)end return end if self:ExternalMovementBusy()then if self.State.Snap then self:RestoreLocal(true)end self.State.LastStatus=string.char(112,97,117,115,101,100,58,32,109,111,118,101,109,101,110,116)return end if not self:IsAlive()then if self.State.Snap then self:RestoreLocal(true)end self.State.LastStatus=string.char(119,97,105,116,105,110,103,32,102,111,114,32,102,105,103,104,116,101,114)return end local _A=self:GetRoot()if not _A then return end local _ka=os.clock()-self.State.PhaseStarted if _ka>=self.State.PhaseDuration then if self.State.Phase==string.char(104,105,100,101)then self:SetPhase(string.char(97,116,116,97,99,107))self:RestoreLocal(true)else self:SetPhase(string.char(104,105,100,101))self.State.VisibleCF=_A.CFrame self.State.VisibleLV=_A.AssemblyLinearVelocity self.State.VisibleAV=_A.AssemblyAngularVelocity end end if self.State.Phase==string.char(104,105,100,101)then self:ApplyVoidPulse(_A,_J)self.State.LastStatus=string.char(118,111,105,100,58,32,104,105,100,101)else self:SampleVisibleRoot(_A,_J)self.State.LastStatus=string.char(118,111,105,100,58,32,97,116,116,97,99,107)end end function _b:GetTargetVelocity(_la)if not _la or not _la.Parent then return Vector3.zero end local _K=os.clock()local _ma=self.VelocityCache[_la]local _na=_la.AssemblyLinearVelocity or Vector3.zero if not _ma then _ma={_L=_la.Position,time=_K,vel=_na,}self.VelocityCache[_la]=_ma return _ma.vel end local _J=_K-_ma.time local _O=_na if _J>0.001 and _J<0.25 then local _oa=(_la.Position-_ma._L)/_J if _oa.Magnitude<1000 then _O=_na:Lerp(_oa,0.50)end end local _pa=math.clamp(tonumber(self.Config.PredictionSmoothing)or 0.58,0,0.98)_ma.vel=_ma.vel:Lerp(_O,1-_pa)_ma._L=_la.Position _ma.time=_K return _ma.vel end function _b:PredictPart(_la,_qa)if not _la or typeof(_la)~=string.char(73,110,115,116,97,110,99,101)or not _la:IsA(string.char(66,97,115,101,80,97,114,116))then return nil end local _C=_la.Position if not self.Config.VoidPrediction then return _C end _qa=_qa or self:GetVisibleOrigin()local _ra=(_C-_qa).Magnitude local _sa=0 if self.Config.ProjectileAssist then local _ta=math.max(tonumber(self.Config.ProjectileSpeed)or 3000,1)_sa=_sa+(_ra/_ta)end if self.Config.PingAssist then _sa=_sa+(self:GetPing()*math.max(tonumber(self.Config.PingFactor)or 1,0))end _sa=_sa*math.max(tonumber(self.Config.PredictionMultiplier)or 1,0)_sa=math.min(_sa,math.max(tonumber(self.Config.PredictionMaxLead)or 0.35,0))local _T=self:GetTargetVelocity(_la)local _ua=_T*_sa local _va=math.max(tonumber(self.Config.MaxPredictionStuds)or 18,0)if _va>0 and _ua.Magnitude>_va then _ua=_ua.Unit*_va end return _C+_ua end function _b:GetSpinRotation(_J,_wa)if not self.Config.SpinEnabled then return nil end if self.Config.SpinOnlyWhileVoid and self.State.Phase~=string.char(104,105,100,101)then return nil end local _K=os.clock()local _X=self.Config.SpinMode local _xa=self.Config.SpinDirection==string.char(76,101,102,116)and-1 or 1 local _ta=math.max(tonumber(self.Config.SpinSpeed)or 720,0)local _Y=math.clamp(tonumber(self.Config.SpinRange)or 180,0,360)local _ya=0 if _X==string.char(74,105,116,116,101,114)then if _K>=self.State.JitterNext then self.State.JitterSign=-self.State.JitterSign self.State.JitterNext=_K+math.max(tonumber(self.Config.JitterInterval)or 0.08,0.01)end _ya=math.rad(_Y*self.State.JitterSign)elseif _X==string.char(82,97,110,100,111,109)then if _K>=self.State.RandomNext then self.State.RandomYaw=math.random(-math.floor(_Y),math.floor(_Y))self.State.RandomNext=_K+math.max(tonumber(self.Config.RandomInterval)or 0.12,0.01)end _ya=math.rad(self.State.RandomYaw)elseif _X==string.char(83,119,97,121)then _ya=math.rad(math.sin(_K*math.max(_ta/90,0.01))*_Y)else if not _wa then self.State.SpinAngle=(self.State.SpinAngle+_ta*_xa*math.max(_J or 0,0))%360 end _ya=math.rad(self.State.SpinAngle)end local _za=0 local _Aa=self.Config.PitchMode local _Ba=math.clamp(tonumber(self.Config.PitchAmount)or 45,0,89)if _Aa==string.char(85,112)then _za=math.rad(-_Ba)elseif _Aa==string.char(68,111,119,110)then _za=math.rad(_Ba)elseif _Aa==string.char(83,105,110,101)then _za=math.rad(math.sin(_K*math.max(_ta/120,0.1))*_Ba)elseif _Aa==string.char(74,105,116,116,101,114)then _za=math.rad(_Ba*self.State.JitterSign)end local _Ca=0 local _Da=self.Config.RollMode local _Ea=math.clamp(tonumber(self.Config.RollAmount)or 25,0,180)if _Da==string.char(84,105,108,116)then _Ca=math.rad(_Ea*_xa)elseif _Da==string.char(83,112,105,110)then if not _wa then self.State.RollAngle=(self.State.RollAngle+_ta*0.5*_xa*math.max(_J or 0,0))%360 end _Ca=math.rad(self.State.RollAngle)elseif _Da==string.char(83,119,97,121)then _Ca=math.rad(math.sin(_K*math.max(_ta/150,0.1))*_Ea)end return CFrame.Angles(_za,_ya,_Ca)end function _b:UpdateSpin(_J)local _B=self:GetHumanoid()local _A=self:GetRoot()if not self.Config.SpinEnabled or not _A or not _B then self:RestoreAutoRotate()return end if self.Config.SpinOnlyWhileVoid and self.State.Phase~=string.char(104,105,100,101)then self:RestoreAutoRotate()return end if self:ExternalMovementBusy()then self:RestoreAutoRotate()return end if self.Config.DisableAutoRotate then if self.State.AutoRotateHumanoid~=_B then self:RestoreAutoRotate()self.State.AutoRotateHumanoid=_B self.State.SavedAutoRotate=_B.AutoRotate end _B.AutoRotate=false end local _Fa=self:GetSpinRotation(_J,false)if not _Fa then return end local _Ga=self.Services.Workspace.CurrentCamera local _Ha=self.Config.CameraSafe and _Ga and _Ga.CFrame or nil pcall(function()local _L=_A.Position _A.CFrame=CFrame.new(_L)*_Fa end)if _Ha and _Ga then pcall(function()_Ga.CFrame=_Ha end)end end function _b:RestoreAutoRotate()local _B=self.State.AutoRotateHumanoid if _B and _B.Parent and self.State.SavedAutoRotate~=nil then pcall(function()_B.AutoRotate=self.State.SavedAutoRotate end)end self.State.AutoRotateHumanoid=nil self.State.SavedAutoRotate=nil end function _b:IsDevKageMenuOpen()if not self.Config.SyncWithDevKage then return self.State.FallbackVisible,false end local _Ia=_a.InstanceIsMenuOpen if type(_Ia)==string.char(102,117,110,99,116,105,111,110)then local _i,_n=pcall(_Ia)if _i then return _n==true,true end end return self.State.FallbackVisible,false end function _b:GetAccent()local _Ja=_a.Library if type(_Ja)==string.char(116,97,98,108,101)and typeof(_Ja.AccentColor)==string.char(67,111,108,111,114,51)then return _Ja.AccentColor end return Color3.fromRGB(0,200,255)end function _b:ApplyAccent()local _Ka=self:GetAccent()for _La,_Ma in pairs(self.AccentObjects)do if _La and _La.Parent then pcall(function()_La[_Ma]=_Ka end)else self.AccentObjects[_La]=nil end end end function _b:Accent(_La,_Ma)if _La then self.AccentObjects[_La]=_Ma orstring.char(66,97,99,107,103,114,111,117,110,100,67,111,108,111,114,51)pcall(function()_La[_Ma orstring.char(66,97,99,107,103,114,111,117,110,100,67,111,108,111,114,51)]=self:GetAccent()end)end return _La end function _b:Font()local _Ia=_a.InstanceGetUiFont if type(_Ia)==string.char(102,117,110,99,116,105,111,110)then local _i,_n=pcall(_Ia)if _i and _n then return _n end end return Enum.Font.Roboto end function _b:Create(_Na,_Oa)local _Pa=Instance.new(_Na)for _c,_d in pairs(_Oa or{})do pcall(function()if _c==string.char(70,111,110,116)and typeof(_d)==string.char(70,111,110,116)then _Pa.FontFace=_d else _Pa[_c]=_d end end)end return _Pa end function _b:MakeText(_Qa,_Ra,_Sa,_Ta)return self:Create(string.char(84,101,120,116,76,97,98,101,108),{Parent=_Qa,BackgroundTransparency=1,Text=_Ra or"",TextColor3=Color3.fromRGB(235,235,235),TextSize=_Sa or 13,Font=self:Font(),TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Center,ZIndex=_Ta or 5,})end function _b:BuildGui()if self.Gui then pcall(function()self.Gui:Destroy()end)end local _Qa pcall(function()_Qa=(gethui and gethui())or self.Services.CoreGui end)_Qa=_Qa or self.Services.CoreGui local _Ua=_Qa:FindFirstChild(string.char(68,101,118,75,97,103,101,86,111,105,100,83,117,105,116,101,85,73))if _Ua then pcall(function()_Ua:Destroy()end)end local _Va=self:Create(string.char(83,99,114,101,101,110,71,117,105),{Name=string.char(68,101,118,75,97,103,101,86,111,105,100,83,117,105,116,101,85,73),ResetOnSpawn=false,IgnoreGuiInset=true,ZIndexBehavior=Enum.ZIndexBehavior.Global,DisplayOrder=2147483645,Enabled=false,Parent=_Qa,})self.Gui=_Va local _Wa=self:Create(string.char(70,114,97,109,101),{Name=string.char(72,111,108,100,101,114),Parent=_Va,AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0.72,0,0.5,0),Size=UDim2.fromOffset(438,374),BackgroundColor3=Color3.fromRGB(20,20,20),BorderColor3=Color3.fromRGB(0,0,0),BorderSizePixel=1,Active=true,ZIndex=2,})self.MainFrame=_Wa local _Xa=self:Create(string.char(70,114,97,109,101),{Parent=_Wa,Position=UDim2.fromOffset(2,2),Size=UDim2.new(1,-4,1,-4),BackgroundColor3=Color3.fromRGB(28,28,28),BorderColor3=Color3.fromRGB(50,50,50),BorderSizePixel=1,ZIndex=3,})local _Ya=self:Create(string.char(70,114,97,109,101),{Parent=_Xa,Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,2),BorderSizePixel=0,ZIndex=7,})self:Accent(_Ya)local _Za=self:Create(string.char(70,114,97,109,101),{Parent=_Xa,Position=UDim2.fromOffset(0,2),Size=UDim2.new(1,0,0,28),BackgroundColor3=Color3.fromRGB(24,24,24),BorderSizePixel=0,Active=true,ZIndex=5,})local _ab=self:MakeText(_Za,string.char(100,101,118,107,97,103,101,32,47,47,32,118,111,105,100,32,115,117,105,116,101),14,7)_ab.Position=UDim2.fromOffset(8,0)_ab.Size=UDim2.new(1,-110,1,0)local _bb=self:MakeText(_Za,string.char(82,105,118,97,108,115,32,32,118)..self.Version,12,7)_bb.AnchorPoint=Vector2.new(1,0)_bb.Position=UDim2.new(1,-8,0,0)_bb.Size=UDim2.fromOffset(100,28)_bb.TextXAlignment=Enum.TextXAlignment.Right _bb.TextColor3=Color3.fromRGB(210,80,80)local _cb=self:Create(string.char(70,114,97,109,101),{Parent=_Xa,Position=UDim2.fromOffset(6,34),Size=UDim2.new(1,-12,0,25),BackgroundColor3=Color3.fromRGB(18,18,18),BorderColor3=Color3.fromRGB(45,45,45),ZIndex=5,})local _db=self:Create(string.char(70,114,97,109,101),{Parent=_Xa,Position=UDim2.fromOffset(6,64),Size=UDim2.new(1,-12,1,-91),BackgroundColor3=Color3.fromRGB(20,20,20),BorderColor3=Color3.fromRGB(45,45,45),ZIndex=4,})local _eb=self:MakeText(_Xa,string.char(115,116,97,116,117,115,58,32,98,111,111,116,105,110,103),11,7)_eb.Position=UDim2.new(0,8,1,-23)_eb.Size=UDim2.new(1,-16,0,18)_eb.TextColor3=Color3.fromRGB(160,160,160)self.StatusLabel=_eb self.Tabs={}self.Controls={}self.ControlRefreshers={}local _fb={string.char(118,111,105,100),string.char(115,112,105,110),string.char(109,105,115,99)}for _j,_f in ipairs(_fb)do local _gb=self:Create(string.char(84,101,120,116,66,117,116,116,111,110),{Parent=_cb,Position=UDim2.new((_j-1)/#_fb,0,0,0),Size=UDim2.new(1/#_fb,0,1,0),BackgroundColor3=Color3.fromRGB(24,24,24),BorderSizePixel=0,Text=_f,TextColor3=Color3.fromRGB(185,185,185),TextSize=12,Font=self:Font(),AutoButtonColor=false,ZIndex=6,})local _hb=self:Create(string.char(70,114,97,109,101),{Parent=_gb,AnchorPoint=Vector2.new(0,1),Position=UDim2.new(0,0,1,0),Size=UDim2.new(1,0,0,2),BackgroundTransparency=1,BorderSizePixel=0,ZIndex=7,})self:Accent(_hb)local _ib=self:Create(string.char(83,99,114,111,108,108,105,110,103,70,114,97,109,101),{Parent=_db,Position=UDim2.fromOffset(0,0),Size=UDim2.fromScale(1,1),BackgroundTransparency=1,BorderSizePixel=0,CanvasSize=UDim2.fromOffset(0,0),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=3,ScrollBarImageColor3=self:GetAccent(),Visible=_j==1,ZIndex=5,})self:Accent(_ib,string.char(83,99,114,111,108,108,66,97,114,73,109,97,103,101,67,111,108,111,114,51))local _jb=self:Create(string.char(85,73,76,105,115,116,76,97,121,111,117,116),{Parent=_ib,Padding=UDim.new(0,4),SortOrder=Enum.SortOrder.LayoutOrder,})self:Create(string.char(85,73,80,97,100,100,105,110,103),{Parent=_ib,PaddingTop=UDim.new(0,6),PaddingBottom=UDim.new(0,6),PaddingLeft=UDim.new(0,7),PaddingRight=UDim.new(0,7),})self.Tabs[_f]={_gb=_gb,_hb=_hb,_ib=_ib}self:Track(_gb.MouseButton1Click:Connect(function()self:SelectTab(_f)end))end self:MakeDraggable(_Za,_Wa)self:BuildVoidTab(self.Tabs.void._ib)self:BuildSpinTab(self.Tabs._Zb._ib)self:BuildMiscTab(self.Tabs.misc._ib)self:SelectTab(string.char(118,111,105,100))self:RefreshAllControls()end function _b:SelectTab(_f)for _kb,_lb in pairs(self.Tabs or{})do local _mb=_kb==_f _lb._ib.Visible=_mb _lb._gb.TextColor3=_mb and Color3.fromRGB(240,240,240)or Color3.fromRGB(165,165,165)_lb._hb.BackgroundTransparency=_mb and 0 or 1 end end function _b:MakeDraggable(_nb,_ob)local _pb=false local _qb,_rb self:Track(_nb.InputBegan:Connect(function(_sb)if _sb.UserInputType==Enum.UserInputType.MouseButton1 then _pb=true _qb=_sb.Position _rb=_ob.Position end end))self:Track(self.Services.UserInputService.InputEnded:Connect(function(_sb)if _sb.UserInputType==Enum.UserInputType.MouseButton1 then _pb=false end end))self:Track(self.Services.UserInputService.InputChanged:Connect(function(_sb)if _pb and _sb.UserInputType==Enum.UserInputType.MouseMovement then local _tb=_sb.Position-_qb _ob.Position=UDim2.new(_rb.X.Scale,_rb.X.Offset+_tb.X,_rb.Y.Scale,_rb.Y.Offset+_tb.Y)end end))end function _b:Row(_Qa,_ub)return self:Create(string.char(70,114,97,109,101),{Parent=_Qa,Size=UDim2.new(1,0,0,_ub or 28),BackgroundColor3=Color3.fromRGB(24,24,24),BorderColor3=Color3.fromRGB(47,47,47),ZIndex=6,})end function _b:AddSection(_Qa,_Ra)local _vb=self:Create(string.char(70,114,97,109,101),{Parent=_Qa,Size=UDim2.new(1,0,0,20),BackgroundTransparency=1,BorderSizePixel=0,ZIndex=6,})local _wb=self:Create(string.char(70,114,97,109,101),{Parent=_vb,Position=UDim2.new(0,0,0.5,0),Size=UDim2.new(1,0,0,1),BackgroundColor3=Color3.fromRGB(48,48,48),BorderSizePixel=0,ZIndex=6,})local _xb=self:MakeText(_vb,string.char(32,32).._Ra..string.char(32,32),11,7)_xb.AutomaticSize=Enum.AutomaticSize.X _xb.Size=UDim2.fromOffset(0,20)_xb.Position=UDim2.fromOffset(6,0)_xb.BackgroundTransparency=0 _xb.BackgroundColor3=Color3.fromRGB(20,20,20)return _vb end function _b:AddToggle(_Qa,_yb,_Ra,_h)local _vb=self:Row(_Qa,27)local _xb=self:MakeText(_vb,_Ra,12,7)_xb.Position=UDim2.fromOffset(8,0)_xb.Size=UDim2.new(1,-45,1,0)local _gb=self:Create(string.char(84,101,120,116,66,117,116,116,111,110),{Parent=_vb,AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-8,0.5,0),Size=UDim2.fromOffset(18,18),BackgroundColor3=Color3.fromRGB(15,15,15),BorderColor3=Color3.fromRGB(65,65,65),Text="",AutoButtonColor=false,ZIndex=8,})local _zb=self:Create(string.char(70,114,97,109,101),{Parent=_gb,Position=UDim2.fromOffset(3,3),Size=UDim2.new(1,-6,1,-6),BorderSizePixel=0,ZIndex=9,})self:Accent(_zb)local function _Ab()local _Bb=self.Config[_yb]==true _zb.Visible=_Bb _gb.BorderColor3=_Bb and self:GetAccent()or Color3.fromRGB(65,65,65)end self.ControlRefreshers[#self.ControlRefreshers+1]=_Ab self:Track(_gb.MouseButton1Click:Connect(function()self.Config[_yb]=not(self.Config[_yb]==true)_Ab()self:SaveConfig()if _h then pcall(_h,self.Config[_yb])end end))return _vb end function _b:AddSlider(_Qa,_yb,_Ra,_Cb,_Db,_Eb,_Fb,_h)local _vb=self:Row(_Qa,42)local _xb=self:MakeText(_vb,_Ra,11,7)_xb.Position=UDim2.fromOffset(8,0)_xb.Size=UDim2.new(1,-110,0,20)local _Gb=self:MakeText(_vb,"",11,7)_Gb.AnchorPoint=Vector2.new(1,0)_Gb.Position=UDim2.new(1,-8,0,0)_Gb.Size=UDim2.fromOffset(95,20)_Gb.TextXAlignment=Enum.TextXAlignment.Right local _Hb=self:Create(string.char(84,101,120,116,66,117,116,116,111,110),{Parent=_vb,Position=UDim2.fromOffset(8,22),Size=UDim2.fromOffset(18,15),BackgroundColor3=Color3.fromRGB(18,18,18),BorderColor3=Color3.fromRGB(55,55,55),Text=string.char(45),TextColor3=Color3.fromRGB(220,220,220),TextSize=13,Font=self:Font(),ZIndex=8,})local _Ib=self:Create(string.char(84,101,120,116,66,117,116,116,111,110),{Parent=_vb,AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-8,0,22),Size=UDim2.fromOffset(18,15),BackgroundColor3=Color3.fromRGB(18,18,18),BorderColor3=Color3.fromRGB(55,55,55),Text=string.char(43),TextColor3=Color3.fromRGB(220,220,220),TextSize=13,Font=self:Font(),ZIndex=8,})local _Jb=self:Create(string.char(70,114,97,109,101),{Parent=_vb,Position=UDim2.fromOffset(31,25),Size=UDim2.new(1,-62,0,8),BackgroundColor3=Color3.fromRGB(12,12,12),BorderColor3=Color3.fromRGB(55,55,55),Active=true,ZIndex=7,})local _zb=self:Create(string.char(70,114,97,109,101),{Parent=_Jb,Size=UDim2.new(0,0,1,0),BorderSizePixel=0,ZIndex=8,})self:Accent(_zb)local _pb=false local function _Kb(_n)_n=math.clamp(_n,_Cb,_Db)_Eb=_Eb or 1 if _Eb>0 then _n=math.floor((_n/_Eb)+0.5)*_Eb end return math.clamp(_n,_Cb,_Db)end local function _Lb(_n,_Mb)_n=_Kb(_n)self.Config[_yb]=_n local _Nb=(_n-_Cb)/math.max(_Db-_Cb,0.0001)_zb.Size=UDim2.new(_Nb,0,1,0)local _Ob=(_Eb and _Eb<1)and 2 or 0 _Gb.Text=string.format(string.char(37,46).._Ob..string.char(102,37,115),_n,_Fb or"")if _h then pcall(_h,_n)end if _Mb then self:SaveConfig()end end local function _Pb()local _Qb=self.Services.UserInputService:GetMouseLocation()local _Nb=math.clamp((_Qb.X-_Jb.AbsolutePosition.X)/math.max(_Jb.AbsoluteSize.X,1),0,1)_Lb(_Cb+(_Db-_Cb)*_Nb,false)end local function _Ab()_Lb(tonumber(self.Config[_yb])or _Cb,false)end self.ControlRefreshers[#self.ControlRefreshers+1]=_Ab self:Track(_Jb.InputBegan:Connect(function(_sb)if _sb.UserInputType==Enum.UserInputType.MouseButton1 then _pb=true _Pb()end end))self:Track(self.Services.UserInputService.InputChanged:Connect(function(_sb)if _pb and _sb.UserInputType==Enum.UserInputType.MouseMovement then _Pb()end end))self:Track(self.Services.UserInputService.InputEnded:Connect(function(_sb)if _pb and _sb.UserInputType==Enum.UserInputType.MouseButton1 then _pb=false self:SaveConfig()end end))self:Track(_Hb.MouseButton1Click:Connect(function()_Lb((tonumber(self.Config[_yb])or _Cb)-(_Eb or 1),true)end))self:Track(_Ib.MouseButton1Click:Connect(function()_Lb((tonumber(self.Config[_yb])or _Cb)+(_Eb or 1),true)end))return _vb end function _b:AddCycle(_Qa,_yb,_Ra,_Rb,_h)local _vb=self:Row(_Qa,27)local _xb=self:MakeText(_vb,_Ra,12,7)_xb.Position=UDim2.fromOffset(8,0)_xb.Size=UDim2.new(0.55,-8,1,0)local _gb=self:Create(string.char(84,101,120,116,66,117,116,116,111,110),{Parent=_vb,AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-8,0.5,0),Size=UDim2.new(0.43,0,0,19),BackgroundColor3=Color3.fromRGB(17,17,17),BorderColor3=Color3.fromRGB(55,55,55),Text="",TextColor3=Color3.fromRGB(220,220,220),TextSize=11,Font=self:Font(),AutoButtonColor=false,ZIndex=8,})local function _Ab()_gb.Text=tostring(self.Config[_yb])end self.ControlRefreshers[#self.ControlRefreshers+1]=_Ab self:Track(_gb.MouseButton1Click:Connect(function()local _Sb=self.Config[_yb]local _Tb=1 for _j,_d in ipairs(_Rb)do if _d==_Sb then _Tb=_j break end end _Tb=(_Tb%#_Rb)+1 self.Config[_yb]=_Rb[_Tb]_Ab()self:SaveConfig()if _h then pcall(_h,self.Config[_yb])end end))return _vb end function _b:AddButton(_Qa,_Ra,_h,_Ub)local _vb=self:Row(_Qa,28)local _gb=self:Create(string.char(84,101,120,116,66,117,116,116,111,110),{Parent=_vb,Position=UDim2.fromOffset(5,4),Size=UDim2.new(1,-10,1,-8),BackgroundColor3=_Ub and Color3.fromRGB(55,24,24)or Color3.fromRGB(18,18,18),BorderColor3=_Ub and Color3.fromRGB(115,48,48)or Color3.fromRGB(60,60,60),Text=_Ra,TextColor3=Color3.fromRGB(225,225,225),TextSize=11,Font=self:Font(),AutoButtonColor=false,ZIndex=8,})self:Track(_gb.MouseButton1Click:Connect(function()if _h then pcall(_h)end end))return _vb end function _b:BuildVoidTab(_ib)self:AddSection(_ib,string.char(118,111,105,100,32,115,112,97,109))self:AddToggle(_ib,string.char(69,110,97,98,108,101,100),string.char(118,111,105,100,32,115,112,97,109),function(_Bb)if _Bb then self:SetPhase(string.char(97,116,116,97,99,107))else self:ResetVoidState(true)end end)self:AddCycle(_ib,string.char(86,111,105,100,75,101,121),string.char(116,111,103,103,108,101,32,107,101,121),{string.char(86),string.char(67),string.char(88),string.char(90),string.char(71),string.char(84),string.char(78,111,110,101)})self:AddCycle(_ib,string.char(86,111,105,100,77,111,100,101),string.char(118,111,105,100,32,109,111,100,101),{string.char(68,101,101,112),string.char(82,97,110,100,111,109),string.char(83,107,121),string.char(69,120,116,114,101,109,101)})self:AddSlider(_ib,string.char(65,116,116,97,99,107,84,105,109,101),string.char(97,116,116,97,99,107,32,47,32,118,105,115,105,98,108,101,32,116,105,109,101),0.05,2.5,0.05,string.char(115))self:AddSlider(_ib,string.char(72,105,100,101,84,105,109,101),string.char(104,105,100,101,32,47,32,118,111,105,100,32,116,105,109,101),0.03,2.0,0.01,string.char(115))self:AddToggle(_ib,string.char(82,97,110,100,111,109,84,105,109,105,110,103),string.char(114,97,110,100,111,109,105,122,101,32,116,105,109,105,110,103))self:AddSlider(_ib,string.char(84,105,109,105,110,103,86,97,114,105,97,110,99,101),string.char(116,105,109,105,110,103,32,118,97,114,105,97,110,99,101),0,0.75,0.01,"")self:AddSlider(_ib,string.char(86,111,105,100,68,101,112,116,104),string.char(118,111,105,100,32,100,101,112,116,104),500,1000000,500,"")self:AddSlider(_ib,string.char(86,111,105,100,82,97,110,103,101),string.char(114,97,110,100,111,109,32,120,47,122,32,114,97,110,103,101),100,25000,100,"")self:AddToggle(_ib,string.char(86,101,108,111,99,105,116,121,78,111,105,115,101),string.char(118,101,108,111,99,105,116,121,32,110,111,105,115,101))self:AddSlider(_ib,string.char(86,101,108,111,99,105,116,121,78,111,105,115,101,65,109,111,117,110,116),string.char(118,101,108,111,99,105,116,121,32,110,111,105,115,101,32,112,111,119,101,114),0,10000,100,"")self:AddSection(_ib,string.char(118,111,105,100,32,112,114,101,100,105,99,116,105,111,110))self:AddToggle(_ib,string.char(86,111,105,100,80,114,101,100,105,99,116,105,111,110),string.char(118,111,105,100,32,112,114,101,100,105,99,116,105,111,110))self:AddSlider(_ib,string.char(80,114,101,100,105,99,116,105,111,110,77,117,108,116,105,112,108,105,101,114),string.char(112,114,101,100,105,99,116,105,111,110,32,109,117,108,116,105,112,108,105,101,114),0.1,3.0,0.05,string.char(120))self:AddSlider(_ib,string.char(80,114,101,100,105,99,116,105,111,110,83,109,111,111,116,104,105,110,103),string.char(118,101,108,111,99,105,116,121,32,115,109,111,111,116,104,105,110,103),0,0.95,0.01,"")self:AddSlider(_ib,string.char(80,114,101,100,105,99,116,105,111,110,77,97,120,76,101,97,100),string.char(109,97,120,32,108,101,97,100,32,116,105,109,101),0,1.0,0.01,string.char(115))self:AddSlider(_ib,string.char(77,97,120,80,114,101,100,105,99,116,105,111,110,83,116,117,100,115),string.char(109,97,120,32,112,114,101,100,105,99,116,105,111,110,32,100,105,115,116,97,110,99,101),0,80,1,string.char(115,116))self:AddToggle(_ib,string.char(80,105,110,103,65,115,115,105,115,116),string.char(112,105,110,103,32,99,111,109,112,101,110,115,97,116,105,111,110))self:AddSlider(_ib,string.char(80,105,110,103,70,97,99,116,111,114),string.char(112,105,110,103,32,102,97,99,116,111,114),0,2.5,0.05,string.char(120))self:AddToggle(_ib,string.char(80,114,111,106,101,99,116,105,108,101,65,115,115,105,115,116),string.char(116,114,97,118,101,108,45,116,105,109,101,32,112,114,101,100,105,99,116,105,111,110))self:AddSlider(_ib,string.char(80,114,111,106,101,99,116,105,108,101,83,112,101,101,100),string.char(112,114,111,106,101,99,116,105,108,101,32,115,112,101,101,100),100,10000,50,"")self:AddSection(_ib,string.char(115,97,102,101,116,121))self:AddToggle(_ib,string.char(82,101,115,112,101,99,116,79,116,104,101,114,77,111,118,101,109,101,110,116),string.char(114,101,115,112,101,99,116,32,111,116,104,101,114,32,109,111,118,101,109,101,110,116,32,115,99,114,105,112,116,115))self:AddToggle(_ib,string.char(65,117,116,111,82,101,99,111,118,101,114),string.char(97,117,116,111,32,114,101,99,111,118,101,114))self:AddToggle(_ib,string.char(82,101,115,112,97,119,110,80,114,111,111,102),string.char(114,101,115,112,97,119,110,32,112,114,111,111,102))end function _b:BuildSpinTab(_ib)self:AddSection(_ib,string.char(115,112,105,110,98,111,116))self:AddToggle(_ib,string.char(83,112,105,110,69,110,97,98,108,101,100),string.char(115,112,105,110,98,111,116),function(_Bb)if not _Bb then self:RestoreAutoRotate()end end)self:AddCycle(_ib,string.char(83,112,105,110,75,101,121),string.char(116,111,103,103,108,101,32,107,101,121),{string.char(66),string.char(78),string.char(77),string.char(72),string.char(74),string.char(75),string.char(78,111,110,101)})self:AddCycle(_ib,string.char(83,112,105,110,77,111,100,101),string.char(121,97,119,32,109,111,100,101),{string.char(83,112,105,110),string.char(74,105,116,116,101,114),string.char(82,97,110,100,111,109),string.char(83,119,97,121)})self:AddCycle(_ib,string.char(83,112,105,110,68,105,114,101,99,116,105,111,110),string.char(100,105,114,101,99,116,105,111,110),{string.char(82,105,103,104,116),string.char(76,101,102,116)})self:AddSlider(_ib,string.char(83,112,105,110,83,112,101,101,100),string.char(115,112,105,110,32,115,112,101,101,100),0,3600,10,string.char(176,47,115))self:AddSlider(_ib,string.char(83,112,105,110,82,97,110,103,101),string.char(121,97,119,32,114,97,110,103,101),0,360,1,string.char(176))self:AddSlider(_ib,string.char(74,105,116,116,101,114,73,110,116,101,114,118,97,108),string.char(106,105,116,116,101,114,32,105,110,116,101,114,118,97,108),0.01,0.5,0.01,string.char(115))self:AddSlider(_ib,string.char(82,97,110,100,111,109,73,110,116,101,114,118,97,108),string.char(114,97,110,100,111,109,32,105,110,116,101,114,118,97,108),0.01,0.5,0.01,string.char(115))self:AddSection(_ib,string.char(112,105,116,99,104,32,47,32,114,111,108,108))self:AddCycle(_ib,string.char(80,105,116,99,104,77,111,100,101),string.char(112,105,116,99,104,32,109,111,100,101),{string.char(78,111,110,101),string.char(85,112),string.char(68,111,119,110),string.char(83,105,110,101),string.char(74,105,116,116,101,114)})self:AddSlider(_ib,string.char(80,105,116,99,104,65,109,111,117,110,116),string.char(112,105,116,99,104,32,97,109,111,117,110,116),0,89,1,string.char(176))self:AddCycle(_ib,string.char(82,111,108,108,77,111,100,101),string.char(114,111,108,108,32,109,111,100,101),{string.char(78,111,110,101),string.char(84,105,108,116),string.char(83,112,105,110),string.char(83,119,97,121)})self:AddSlider(_ib,string.char(82,111,108,108,65,109,111,117,110,116),string.char(114,111,108,108,32,97,109,111,117,110,116),0,180,1,string.char(176))self:AddSection(_ib,string.char(98,101,104,97,118,105,111,114))self:AddToggle(_ib,string.char(83,112,105,110,79,110,108,121,87,104,105,108,101,86,111,105,100),string.char(115,112,105,110,32,111,110,108,121,32,119,104,105,108,101,32,104,105,100,100,101,110))self:AddToggle(_ib,string.char(67,97,109,101,114,97,83,97,102,101),string.char(107,101,101,112,32,99,97,109,101,114,97,32,115,116,101,97,100,121))self:AddToggle(_ib,string.char(68,105,115,97,98,108,101,65,117,116,111,82,111,116,97,116,101),string.char(100,105,115,97,98,108,101,32,104,117,109,97,110,111,105,100,32,97,117,116,111,114,111,116,97,116,101))end function _b:BuildMiscTab(_ib)self:AddSection(_ib,string.char(99,111,101,120,105,115,116,101,110,99,101))self:AddToggle(_ib,string.char(83,121,110,99,87,105,116,104,68,101,118,75,97,103,101),string.char(109,105,114,114,111,114,32,109,97,105,110,32,100,101,118,107,97,103,101,32,117,105))self:AddCycle(_ib,string.char(70,97,108,108,98,97,99,107,85,105,75,101,121),string.char(115,116,97,110,100,97,108,111,110,101,32,117,105,32,107,101,121),{string.char(82,105,103,104,116,65,108,116),string.char(82,105,103,104,116,83,104,105,102,116),string.char(73,110,115,101,114,116),string.char(72,111,109,101)})self:AddToggle(_ib,string.char(83,97,118,101,83,101,116,116,105,110,103,115),string.char(115,97,118,101,32,115,101,116,116,105,110,103,115))self:AddToggle(_ib,string.char(83,104,111,119,83,116,97,116,117,115),string.char(115,104,111,119,32,114,117,110,116,105,109,101,32,115,116,97,116,117,115))self:AddSection(_ib,string.char(114,117,110,116,105,109,101,32,97,112,105))self:AddButton(_ib,string.char(99,111,112,121,32,112,114,101,100,105,99,116,105,111,110,32,97,112,105,32,110,97,109,101),function()if setclipboard then pcall(setclipboard,string.char(103,101,116,103,101,110,118,40,41,46,68,101,118,75,97,103,101,86,111,105,100,80,114,101,100,105,99,116,40,112,97,114,116,44,32,111,114,105,103,105,110,41))end end)self:AddButton(_ib,string.char(99,111,112,121,32,118,105,115,105,98,108,101,45,111,114,105,103,105,110,32,97,112,105,32,110,97,109,101),function()if setclipboard then pcall(setclipboard,string.char(103,101,116,103,101,110,118,40,41,46,68,101,118,75,97,103,101,86,111,105,100,79,114,105,103,105,110,40,41))end end)self:AddButton(_ib,string.char(102,111,114,99,101,32,102,105,103,104,116,101,114,32,114,101,102,114,101,115,104),function()self:RefreshFighterController()end)self:AddButton(_ib,string.char(114,101,115,101,116,32,115,101,116,116,105,110,103,115),function()self:ResetConfig()end)self:AddButton(_ib,string.char(112,97,110,105,99,32,47,32,117,110,108,111,97,100,32,99,111,109,112,97,110,105,111,110),function()self:Unload(string.char(112,97,110,105,99))end,true)end function _b:RefreshAllControls()for _da,_Ia in ipairs(self.ControlRefreshers or{})do pcall(_Ia)end end function _b:UpdateUi(_J)if not self.Gui then return end local _K=os.clock()if _K-self.State.LastUiSync>=0.05 then self.State.LastUiSync=_K local _Vb,_Wb=self:IsDevKageMenuOpen()self.State.MainMenuLinked=_Wb self.State.GuiOpen=_Vb self.Gui.Enabled=_Vb end if _K-self.State.LastThemeUpdate>=0.20 then self.State.LastThemeUpdate=_K self:ApplyAccent()end if self.StatusLabel then if not self.Config.ShowStatus then self.StatusLabel.Text=""return end local _q=math.floor(self:GetPing()*1000+0.5)local _Xb=(_a.__DevKageMaskShard andstring.char(109,97,115,107,58,111,110))orstring.char(109,97,115,107,58,111,102,102)local _Yb=self.State.MainMenuLinked andstring.char(117,105,58,108,105,110,107,101,100)orstring.char(117,105,58,115,116,97,110,100,97,108,111,110,101)local _H=self.Config.Enabled and self.State.Phase orstring.char(111,102,102)local _Zb=self.Config.SpinEnabled and self.Config.SpinMode orstring.char(111,102,102)self.StatusLabel.Text=string.format(string.char(118,111,105,100,58,37,115,32,124,32,115,112,105,110,58,37,115,32,124,32,37,100,109,115,32,124,32,37,115,32,124,32,37,115,32,124,32,114,111,111,116,58,37,115),_H,_Zb,_q,_Xb,_Yb,self.State.FighterSource orstring.char(63))end end function _b:HandleKey(_sb,_ac)if _ac then return end if self.Services.UserInputService:GetFocusedTextBox()then return end if _sb.UserInputType~=Enum.UserInputType.Keyboard then return end local _f=_sb.KeyCode.Name if self.Config.VoidKey~=string.char(78,111,110,101)and _f==self.Config.VoidKey then self.Config.Enabled=not self.Config.Enabled if self.Config.Enabled then self:SetPhase(string.char(97,116,116,97,99,107))else self:ResetVoidState(true)end self:SaveConfig()self:RefreshAllControls()return end if self.Config.SpinKey~=string.char(78,111,110,101)and _f==self.Config.SpinKey then self.Config.SpinEnabled=not self.Config.SpinEnabled if not self.Config.SpinEnabled then self:RestoreAutoRotate()end self:SaveConfig()self:RefreshAllControls()return end if _f==self.Config.FallbackUiKey and not self.State.MainMenuLinked then self.State.FallbackVisible=not self.State.FallbackVisible end end function _b:OnCharacterAdded()self:ResetVoidState(false)self:RestoreAutoRotate()task.delay(0.5,function()if not self.Running then return end self:RefreshFighterController()end)end function _b:RegisterMaskShard()local _Xb=_a.__DevKageMaskShard if type(_Xb)~=string.char(116,97,98,108,101)or type(_Xb.Runtime)~=string.char(116,97,98,108,101)then return end self.MaskPredictionExport=function(_la,_qa)return self:PredictPart(_la,_qa)end _Xb.Runtime.VoidSuite=self _Xb.Runtime.VoidPrediction=self.MaskPredictionExport end function _b:UnregisterMaskShard()local _Xb=_a.__DevKageMaskShard if type(_Xb)==string.char(116,97,98,108,101)and type(_Xb.Runtime)==string.char(116,97,98,108,101)then if _Xb.Runtime.VoidSuite==self then _Xb.Runtime.VoidSuite=nil end if _Xb.Runtime.VoidPrediction==self.MaskPredictionExport then _Xb.Runtime.VoidPrediction=nil end end self.MaskPredictionExport=nil end function _b:StartLoops()self:Track(self.Services.RunService.Heartbeat:Connect(function(_J)if not self.Running then return end local _i,_bc=pcall(function()self:UpdateVoid(_J or 0)end)if not _i then self.State.LastError=tostring(_bc)if self.Config.AutoRecover then pcall(function()self:RestoreLocal(true)end)end end end))self:Bind(string.char(68,75,95,86,111,105,100,83,117,105,116,101,95,76,111,99,97,108,82,101,115,116,111,114,101),Enum.RenderPriority.Camera.Value-8,function(_J)if not self.Running then return end if self.State.Snap then self:RestoreLocal(false)end end)self:Bind(string.char(68,75,95,86,111,105,100,83,117,105,116,101,95,83,112,105,110),Enum.RenderPriority.Camera.Value+2,function(_J)if not self.Running then return end self:UpdateSpin(_J or 0)end)self:Bind(string.char(68,75,95,86,111,105,100,83,117,105,116,101,95,85,73),Enum.RenderPriority.Last.Value+4,function(_J)if not self.Running then return end self:UpdateUi(_J or 0)end)end function _b:Unload(_cc)if not self.Running then return end self.Running=false pcall(function()self:RestoreLocal(true)end)pcall(function()self:RestoreAutoRotate()end)self:UnbindAll()self:DisconnectAll()self:UnregisterMaskShard()if self.Gui then pcall(function()self.Gui:Destroy()end)self.Gui=nil end if _a.DevKageVoidSuite==self then _a.DevKageVoidSuite=nil end if _a.DevKageVoidPredict==self.PredictionExport then _a.DevKageVoidPredict=nil end if _a.DevKageVoidOrigin==self.OriginExport then _a.DevKageVoidOrigin=nil end end function _b:Init()self:LoadConfig()self:SetPhase(string.char(97,116,116,97,99,107))self.Player=self.Services.Players.LocalPlayer or self.Services.Players.PlayerAdded:Wait()if not self.Running then return end if not game:IsLoaded()then game.Loaded:Wait()end if not self.Running then return end local _v=self.Player:WaitForChild(string.char(80,108,97,121,101,114,83,99,114,105,112,116,115),15)if _v then _v:WaitForChild(string.char(67,111,110,116,114,111,108,108,101,114,115),8)end self:RefreshFighterController()self:BuildGui()self:RegisterMaskShard()self.PredictionExport=function(_la,_qa)return self:PredictPart(_la,_qa)end self.OriginExport=function()return self:GetVisibleOrigin()end _a.DevKageVoidPredict=self.PredictionExport _a.DevKageVoidOrigin=self.OriginExport self:Track(self.Services.UserInputService.InputBegan:Connect(function(_sb,_ac)self:HandleKey(_sb,_ac)end))self:Track(self.Player.CharacterAdded:Connect(function()if self.Config.RespawnProof then self:OnCharacterAdded()else self:ResetVoidState(true)end end))self:Track(self.Services.Workspace:GetPropertyChangedSignal(string.char(67,117,114,114,101,110,116,67,97,109,101,114,97)):Connect(function()end))self:StartLoops()self.Ready=true self.State.LastStatus=string.char(114,101,97,100,121)end task.spawn(function()local _i,_bc=xpcall(function()_b:Init()end,function(_dc)if type(debug)==string.char(116,97,98,108,101)and type(debug.traceback)==string.char(102,117,110,99,116,105,111,110)then local _ec,_fc=pcall(debug.traceback,tostring(_dc),2)if _ec and _fc then return _fc end end return tostring(_dc)end)if not _i then _b.State.LastError=tostring(_bc)warn(string.char(91,68,101,118,75,97,103,101,32,86,111,105,100,32,83,117,105,116,101,93,32)..tostring(_bc))if _b.Config.AutoRecover then pcall(function()_b:RestoreLocal(true)end)end end end)return _b
+--[[
+    DevKage Void Suite Companion v1.1
+    Standalone / coexistence-first companion for DevKage + MaskShard.
+
+    Goals:
+      * Void spam with local visual restore.
+      * Void/self prediction + reusable target prediction API.
+      * Feature-rich spinbot without hooking game modules/remotes.
+      * Small DevKage-style UI that mirrors the main DevKage menu.
+      * Safe reruns and coexistence with other executor scripts.
+
+    Runtime exports:
+      getgenv().DevKageVoidSuite
+      getgenv().DevKageVoidPredict(part, origin)
+      getgenv().DevKageVoidOrigin()
+--]]
+
+local ENV = _G
+do
+    -- Opiumware compatibility: resolve getgenv without assuming the symbol is callable.
+    local getter = getgenv
+    if type(getter) == "function" then
+        local ok, value = pcall(getter)
+        if ok and type(value) == "table" then
+            ENV = value
+        end
+    end
+end
+
+if ENV.DevKageVoidSuite and type(ENV.DevKageVoidSuite) == "table" and type(ENV.DevKageVoidSuite.Unload) == "function" then
+    pcall(function()
+        ENV.DevKageVoidSuite:Unload("reload")
+    end)
+end
+
+local S = {
+    Name = "DevKage Void Suite",
+    Version = "1.1.0",
+    Running = true,
+    Ready = false,
+    Connections = {},
+    BoundSteps = {},
+    AccentObjects = {},
+    VelocityCache = setmetatable({}, { __mode = "k" }),
+}
+ENV.DevKageVoidSuite = S
+
+S.Services = {
+    Players = game:GetService("Players"),
+    RunService = game:GetService("RunService"),
+    UserInputService = game:GetService("UserInputService"),
+    TweenService = game:GetService("TweenService"),
+    HttpService = game:GetService("HttpService"),
+    Stats = game:GetService("Stats"),
+    Workspace = game:GetService("Workspace"),
+    CoreGui = game:GetService("CoreGui"),
+}
+
+S.Player = S.Services.Players.LocalPlayer
+
+S.Defaults = {
+    Enabled = false,
+    VoidKey = "V",
+    SpinKey = "B",
+
+    AttackTime = 0.85,
+    HideTime = 0.30,
+    RandomTiming = true,
+    TimingVariance = 0.18,
+
+    VoidMode = "Deep",
+    VoidDepth = 250000,
+    VoidRange = 9000,
+    ExtremeScale = 1750000000,
+    VelocityNoise = false,
+    VelocityNoiseAmount = 2500,
+
+    VoidPrediction = true,
+    PredictionMultiplier = 1.20,
+    PredictionSmoothing = 0.58,
+    PredictionMaxLead = 0.35,
+    PingAssist = true,
+    PingFactor = 1.00,
+    ProjectileAssist = true,
+    ProjectileSpeed = 3000,
+    MaxPredictionStuds = 18,
+
+    RespectOtherMovement = true,
+    AutoRecover = true,
+    RespawnProof = true,
+
+    SpinEnabled = false,
+    SpinMode = "Spin",
+    SpinDirection = "Right",
+    SpinSpeed = 720,
+    SpinRange = 180,
+    JitterInterval = 0.08,
+    RandomInterval = 0.12,
+    PitchMode = "None",
+    PitchAmount = 45,
+    RollMode = "None",
+    RollAmount = 25,
+    SpinOnlyWhileVoid = false,
+    CameraSafe = true,
+    DisableAutoRotate = true,
+
+    SyncWithDevKage = true,
+    FallbackUiKey = "RightAlt",
+    SaveSettings = true,
+    ShowStatus = true,
+}
+
+S.Config = {}
+for k, v in pairs(S.Defaults) do
+    S.Config[k] = v
+end
+
+S.State = {
+    Phase = "attack",
+    PhaseStarted = 0,
+    PhaseDuration = 0,
+    LastRoot = nil,
+    Snap = nil,
+    VisibleCF = nil,
+    VisibleLV = Vector3.zero,
+    VisibleAV = Vector3.zero,
+    SmoothedSelfVelocity = Vector3.zero,
+    LastVisiblePosition = nil,
+    LastVisibleSample = 0,
+    SpinAngle = 0,
+    RollAngle = 0,
+    JitterSign = 1,
+    JitterNext = 0,
+    RandomYaw = 0,
+    RandomNext = 0,
+    SavedAutoRotate = nil,
+    AutoRotateHumanoid = nil,
+    FighterController = nil,
+    FighterSource = "character",
+    LastError = nil,
+    LastStatus = "booting",
+    FallbackVisible = true,
+    MainMenuLinked = false,
+    GuiOpen = false,
+    LastThemeUpdate = 0,
+    LastUiSync = 0,
+}
+
+S.ConfigFolder = "DevKage_Configs"
+S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion.json"
+
+function S:Track(connection)
+    if connection then
+        self.Connections[#self.Connections + 1] = connection
+    end
+    return connection
+end
+
+function S:Bind(name, priority, callback)
+    pcall(function()
+        self.Services.RunService:UnbindFromRenderStep(name)
+    end)
+    local ok = pcall(function()
+        self.Services.RunService:BindToRenderStep(name, priority, callback)
+    end)
+    if ok then
+        self.BoundSteps[name] = true
+    end
+    return ok
+end
+
+function S:UnbindAll()
+    for name in pairs(self.BoundSteps) do
+        pcall(function()
+            self.Services.RunService:UnbindFromRenderStep(name)
+        end)
+    end
+    self.BoundSteps = {}
+end
+
+function S:DisconnectAll()
+    for i = #self.Connections, 1, -1 do
+        local c = self.Connections[i]
+        self.Connections[i] = nil
+        pcall(function()
+            c:Disconnect()
+        end)
+    end
+end
+
+function S:MergeConfig(source)
+    if type(source) ~= "table" then return end
+    for k, default in pairs(self.Defaults) do
+        local value = source[k]
+        if value ~= nil and type(value) == type(default) then
+            self.Config[k] = value
+        end
+    end
+end
+
+function S:LoadConfig()
+    if not (isfile and readfile) then return false end
+    local ok, decoded = pcall(function()
+        if not isfile(self.ConfigPath) then return nil end
+        local raw = readfile(self.ConfigPath)
+        if type(raw) ~= "string" or raw == "" then return nil end
+        return self.Services.HttpService:JSONDecode(raw)
+    end)
+    if ok and type(decoded) == "table" then
+        self:MergeConfig(decoded)
+        return true
+    end
+    return false
+end
+
+function S:SaveConfig()
+    if not self.Config.SaveSettings then return end
+    if not (writefile and self.Services.HttpService) then return end
+    pcall(function()
+        if makefolder and isfolder and not isfolder(self.ConfigFolder) then
+            makefolder(self.ConfigFolder)
+        elseif makefolder and not isfolder then
+            pcall(makefolder, self.ConfigFolder)
+        end
+        writefile(self.ConfigPath, self.Services.HttpService:JSONEncode(self.Config))
+    end)
+end
+
+function S:ResetConfig()
+    for k, v in pairs(self.Defaults) do
+        self.Config[k] = v
+    end
+    self:SaveConfig()
+    if self.RefreshAllControls then
+        self:RefreshAllControls()
+    end
+end
+
+function S:GetPing()
+    local ping = 0
+    pcall(function()
+        local network = self.Services.Stats.Network
+        local item = network and network.ServerStatsItem and network.ServerStatsItem["Data Ping"]
+        if item then
+            ping = (tonumber(item:GetValue()) or 0) / 1000
+        end
+    end)
+    return math.clamp(ping, 0, 1.5)
+end
+
+function S:GetCharacter()
+    local p = self.Player or self.Services.Players.LocalPlayer
+    return p and p.Character or nil
+end
+
+function S:GetHumanoid()
+    local char = self:GetCharacter()
+    return char and char:FindFirstChildOfClass("Humanoid") or nil
+end
+
+function S:RefreshFighterController()
+    local p = self.Player
+    if not p then return end
+    local playerScripts = p:FindFirstChild("PlayerScripts")
+    local controllers = playerScripts and playerScripts:FindFirstChild("Controllers")
+    local module = controllers and controllers:FindFirstChild("FighterController")
+    if not module or not module:IsA("ModuleScript") then return end
+
+    local loader = ENV.InstanceRequire
+    local ok, controller
+    if type(loader) == "function" then
+        ok, controller = pcall(loader, module, 2)
+    else
+        ok, controller = pcall(require, module)
+    end
+    if ok and type(controller) == "table" then
+        self.State.FighterController = controller
+    end
+end
+
+function S:GetRoot()
+    local controller = self.State.FighterController
+    if controller and controller.LocalFighter then
+        local entity = controller.LocalFighter.Entity
+        local root = entity and entity.RootPart
+        if root and typeof(root) == "Instance" and root:IsA("BasePart") and root.Parent then
+            self.State.FighterSource = "fighter"
+            return root
+        end
+    end
+
+    local char = self:GetCharacter()
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") then
+        self.State.FighterSource = "character"
+        return root
+    end
+    return nil
+end
+
+function S:IsAlive()
+    local hum = self:GetHumanoid()
+    local root = self:GetRoot()
+    return hum ~= nil and hum.Health > 0 and root ~= nil
+end
+
+function S:ExternalMovementBusy()
+    if not self.Config.RespectOtherMovement then return false end
+    if ENV.InstanceUndergroundEnabled == true then return true end
+    if rawget(_G, "keyheldcframe") == true then return true end
+    if rawget(_G, "keyheldcframefly") == true then return true end
+    if ENV.__DEVKAGE_LATE_BOOT_WAITING == true then return true end
+    return false
+end
+
+function S:RandDuration(base)
+    base = math.max(tonumber(base) or 0.2, 0.03)
+    if not self.Config.RandomTiming then return base end
+    local variance = math.clamp(tonumber(self.Config.TimingVariance) or 0, 0, 0.9)
+    local lo = base * (1 - variance)
+    local hi = base * (1 + variance)
+    return lo + math.random() * (hi - lo)
+end
+
+function S:SetPhase(phase)
+    self.State.Phase = phase
+    self.State.PhaseStarted = os.clock()
+    if phase == "hide" then
+        self.State.PhaseDuration = self:RandDuration(self.Config.HideTime)
+    else
+        self.State.PhaseDuration = self:RandDuration(self.Config.AttackTime)
+    end
+end
+
+function S:ResetVoidState(restore)
+    if restore ~= false then
+        self:RestoreLocal(true)
+    end
+    self.State.Snap = nil
+    self.State.VisibleCF = nil
+    self.State.LastVisiblePosition = nil
+    self.State.LastVisibleSample = 0
+    self.State.SmoothedSelfVelocity = Vector3.zero
+    self:SetPhase("attack")
+end
+
+function S:SampleVisibleRoot(root, dt)
+    if not root then return end
+    local now = os.clock()
+    local pos = root.Position
+    local lastPos = self.State.LastVisiblePosition
+    local lastAt = self.State.LastVisibleSample
+    local measured = root.AssemblyLinearVelocity
+
+    if lastPos and lastAt > 0 then
+        local sampleDt = now - lastAt
+        if sampleDt > 0.001 and sampleDt < 0.25 then
+            local deltaVel = (pos - lastPos) / sampleDt
+            if deltaVel.Magnitude < 600 then
+                measured = measured:Lerp(deltaVel, 0.45)
+            end
+        end
+    end
+
+    local alpha = math.clamp(tonumber(self.Config.PredictionSmoothing) or 0.58, 0, 0.98)
+    self.State.SmoothedSelfVelocity = self.State.SmoothedSelfVelocity:Lerp(measured, 1 - alpha)
+    self.State.LastVisiblePosition = pos
+    self.State.LastVisibleSample = now
+    self.State.VisibleCF = root.CFrame
+    self.State.VisibleLV = root.AssemblyLinearVelocity
+    self.State.VisibleAV = root.AssemblyAngularVelocity
+end
+
+function S:AdvanceVisiblePrediction(dt)
+    if not self.Config.VoidPrediction then return end
+    local cf = self.State.VisibleCF
+    if not cf then return end
+
+    local velocity = self.State.SmoothedSelfVelocity
+    local maxLead = math.max(tonumber(self.Config.MaxPredictionStuds) or 18, 0)
+    local advance = velocity * math.max(dt or 0, 0) * math.max(tonumber(self.Config.PredictionMultiplier) or 1, 0)
+    if advance.Magnitude > maxLead and advance.Magnitude > 0 then
+        advance = advance.Unit * maxLead
+    end
+    self.State.VisibleCF = cf + advance
+end
+
+function S:GetVisibleCF(root)
+    return self.State.VisibleCF or (root and root.CFrame) or CFrame.new()
+end
+
+function S:GetVisibleOrigin()
+    local root = self:GetRoot()
+    local cf = self:GetVisibleCF(root)
+    return cf.Position
+end
+
+function S:BuildVoidCFrame(root)
+    local visible = self:GetVisibleCF(root)
+    local p = visible.Position
+    local mode = self.Config.VoidMode
+    local range = math.max(tonumber(self.Config.VoidRange) or 9000, 50)
+    local depth = math.max(tonumber(self.Config.VoidDepth) or 250000, 500)
+
+    if mode == "Random" then
+        p = Vector3.new(
+            math.random(-math.floor(range), math.floor(range)),
+            -depth,
+            math.random(-math.floor(range), math.floor(range))
+        )
+    elseif mode == "Extreme" then
+        local scale = math.clamp(tonumber(self.Config.ExtremeScale) or 1750000000, 100000, 2000000000)
+        local function edge()
+            local n = math.random(math.floor(scale * 0.68), math.floor(scale))
+            return math.random(0, 1) == 0 and -n or n
+        end
+        p = Vector3.new(edge(), edge(), edge())
+    elseif mode == "Sky" then
+        p = Vector3.new(p.X, depth, p.Z)
+    else
+        p = Vector3.new(p.X, -depth, p.Z)
+    end
+
+    local _, y, _ = visible:ToOrientation()
+    return CFrame.new(p) * CFrame.Angles(0, y, 0)
+end
+
+function S:ApplyVoidPulse(root, dt)
+    if not root or not root.Parent then return end
+
+    if not self.State.Snap or self.State.Snap.root ~= root then
+        self.State.Snap = {
+            root = root,
+            cf = self:GetVisibleCF(root),
+            lv = root.AssemblyLinearVelocity,
+            av = root.AssemblyAngularVelocity,
+        }
+    else
+        self.State.Snap.cf = self:GetVisibleCF(root)
+        self.State.Snap.lv = self.State.VisibleLV
+        self.State.Snap.av = self.State.VisibleAV
+    end
+
+    self:AdvanceVisiblePrediction(dt)
+    self.State.Snap.cf = self:GetVisibleCF(root)
+
+    local voidCF = self:BuildVoidCFrame(root)
+    local spinCF = self:GetSpinRotation(dt, true)
+    if spinCF then
+        voidCF = voidCF * spinCF
+    end
+
+    pcall(function()
+        root.CFrame = voidCF
+        if self.Config.VelocityNoise then
+            local n = math.floor(math.max(tonumber(self.Config.VelocityNoiseAmount) or 2500, 0))
+            root.AssemblyLinearVelocity = Vector3.new(
+                math.random(-n, n),
+                math.random(-n, n),
+                math.random(-n, n)
+            )
+        end
+    end)
+end
+
+function S:RestoreLocal(force)
+    local snap = self.State.Snap
+    if not snap then return end
+    local root = snap.root
+    if not root or not root.Parent then
+        self.State.Snap = nil
+        return
+    end
+
+    pcall(function()
+        local restoreCF = self.State.VisibleCF or snap.cf
+        if restoreCF then
+            root.CFrame = restoreCF
+        end
+        if snap.lv then root.AssemblyLinearVelocity = snap.lv end
+        if snap.av then root.AssemblyAngularVelocity = snap.av end
+    end)
+
+    if force then
+        self.State.Snap = nil
+    end
+end
+
+function S:UpdateVoid(dt)
+    if not self.Config.Enabled then
+        if self.State.Snap then self:RestoreLocal(true) end
+        return
+    end
+    if self:ExternalMovementBusy() then
+        if self.State.Snap then self:RestoreLocal(true) end
+        self.State.LastStatus = "paused: movement"
+        return
+    end
+    if not self:IsAlive() then
+        if self.State.Snap then self:RestoreLocal(true) end
+        self.State.LastStatus = "waiting for fighter"
+        return
+    end
+
+    local root = self:GetRoot()
+    if not root then return end
+
+    local elapsed = os.clock() - self.State.PhaseStarted
+    if elapsed >= self.State.PhaseDuration then
+        if self.State.Phase == "hide" then
+            self:SetPhase("attack")
+            self:RestoreLocal(true)
+        else
+            self:SetPhase("hide")
+            self.State.VisibleCF = root.CFrame
+            self.State.VisibleLV = root.AssemblyLinearVelocity
+            self.State.VisibleAV = root.AssemblyAngularVelocity
+        end
+    end
+
+    if self.State.Phase == "hide" then
+        self:ApplyVoidPulse(root, dt)
+        self.State.LastStatus = "void: hide"
+    else
+        self:SampleVisibleRoot(root, dt)
+        self.State.LastStatus = "void: attack"
+    end
+end
+
+function S:GetTargetVelocity(part)
+    if not part or not part.Parent then return Vector3.zero end
+    local now = os.clock()
+    local cache = self.VelocityCache[part]
+    local assembly = part.AssemblyLinearVelocity or Vector3.zero
+
+    if not cache then
+        cache = {
+            pos = part.Position,
+            time = now,
+            vel = assembly,
+        }
+        self.VelocityCache[part] = cache
+        return cache.vel
+    end
+
+    local dt = now - cache.time
+    local measured = assembly
+    if dt > 0.001 and dt < 0.25 then
+        local sampled = (part.Position - cache.pos) / dt
+        if sampled.Magnitude < 1000 then
+            measured = assembly:Lerp(sampled, 0.50)
+        end
+    end
+
+    local smooth = math.clamp(tonumber(self.Config.PredictionSmoothing) or 0.58, 0, 0.98)
+    cache.vel = cache.vel:Lerp(measured, 1 - smooth)
+    cache.pos = part.Position
+    cache.time = now
+    return cache.vel
+end
+
+function S:PredictPart(part, origin)
+    if not part or typeof(part) ~= "Instance" or not part:IsA("BasePart") then
+        return nil
+    end
+
+    local base = part.Position
+    if not self.Config.VoidPrediction then
+        return base
+    end
+
+    origin = origin or self:GetVisibleOrigin()
+    local distance = (base - origin).Magnitude
+    local t = 0
+
+    if self.Config.ProjectileAssist then
+        local speed = math.max(tonumber(self.Config.ProjectileSpeed) or 3000, 1)
+        t = t + (distance / speed)
+    end
+    if self.Config.PingAssist then
+        t = t + (self:GetPing() * math.max(tonumber(self.Config.PingFactor) or 1, 0))
+    end
+
+    t = t * math.max(tonumber(self.Config.PredictionMultiplier) or 1, 0)
+    t = math.min(t, math.max(tonumber(self.Config.PredictionMaxLead) or 0.35, 0))
+
+    local velocity = self:GetTargetVelocity(part)
+    local offset = velocity * t
+    local cap = math.max(tonumber(self.Config.MaxPredictionStuds) or 18, 0)
+    if cap > 0 and offset.Magnitude > cap then
+        offset = offset.Unit * cap
+    end
+    return base + offset
+end
+
+function S:GetSpinRotation(dt, serverPulse)
+    if not self.Config.SpinEnabled then return nil end
+    if self.Config.SpinOnlyWhileVoid and self.State.Phase ~= "hide" then return nil end
+
+    local now = os.clock()
+    local mode = self.Config.SpinMode
+    local dir = self.Config.SpinDirection == "Left" and -1 or 1
+    local speed = math.max(tonumber(self.Config.SpinSpeed) or 720, 0)
+    local range = math.clamp(tonumber(self.Config.SpinRange) or 180, 0, 360)
+    local yaw = 0
+
+    if mode == "Jitter" then
+        if now >= self.State.JitterNext then
+            self.State.JitterSign = -self.State.JitterSign
+            self.State.JitterNext = now + math.max(tonumber(self.Config.JitterInterval) or 0.08, 0.01)
+        end
+        yaw = math.rad(range * self.State.JitterSign)
+    elseif mode == "Random" then
+        if now >= self.State.RandomNext then
+            self.State.RandomYaw = math.random(-math.floor(range), math.floor(range))
+            self.State.RandomNext = now + math.max(tonumber(self.Config.RandomInterval) or 0.12, 0.01)
+        end
+        yaw = math.rad(self.State.RandomYaw)
+    elseif mode == "Sway" then
+        yaw = math.rad(math.sin(now * math.max(speed / 90, 0.01)) * range)
+    else
+        if not serverPulse then
+            self.State.SpinAngle = (self.State.SpinAngle + speed * dir * math.max(dt or 0, 0)) % 360
+        end
+        yaw = math.rad(self.State.SpinAngle)
+    end
+
+    local pitch = 0
+    local pitchMode = self.Config.PitchMode
+    local pitchAmount = math.clamp(tonumber(self.Config.PitchAmount) or 45, 0, 89)
+    if pitchMode == "Up" then
+        pitch = math.rad(-pitchAmount)
+    elseif pitchMode == "Down" then
+        pitch = math.rad(pitchAmount)
+    elseif pitchMode == "Sine" then
+        pitch = math.rad(math.sin(now * math.max(speed / 120, 0.1)) * pitchAmount)
+    elseif pitchMode == "Jitter" then
+        pitch = math.rad(pitchAmount * self.State.JitterSign)
+    end
+
+    local roll = 0
+    local rollMode = self.Config.RollMode
+    local rollAmount = math.clamp(tonumber(self.Config.RollAmount) or 25, 0, 180)
+    if rollMode == "Tilt" then
+        roll = math.rad(rollAmount * dir)
+    elseif rollMode == "Spin" then
+        if not serverPulse then
+            self.State.RollAngle = (self.State.RollAngle + speed * 0.5 * dir * math.max(dt or 0, 0)) % 360
+        end
+        roll = math.rad(self.State.RollAngle)
+    elseif rollMode == "Sway" then
+        roll = math.rad(math.sin(now * math.max(speed / 150, 0.1)) * rollAmount)
+    end
+
+    return CFrame.Angles(pitch, yaw, roll)
+end
+
+function S:UpdateSpin(dt)
+    local hum = self:GetHumanoid()
+    local root = self:GetRoot()
+
+    if not self.Config.SpinEnabled or not root or not hum then
+        self:RestoreAutoRotate()
+        return
+    end
+    if self.Config.SpinOnlyWhileVoid and self.State.Phase ~= "hide" then
+        self:RestoreAutoRotate()
+        return
+    end
+    if self:ExternalMovementBusy() then
+        self:RestoreAutoRotate()
+        return
+    end
+
+    if self.Config.DisableAutoRotate then
+        if self.State.AutoRotateHumanoid ~= hum then
+            self:RestoreAutoRotate()
+            self.State.AutoRotateHumanoid = hum
+            self.State.SavedAutoRotate = hum.AutoRotate
+        end
+        hum.AutoRotate = false
+    end
+
+    local rotation = self:GetSpinRotation(dt, false)
+    if not rotation then return end
+
+    local camera = self.Services.Workspace.CurrentCamera
+    local cameraCF = self.Config.CameraSafe and camera and camera.CFrame or nil
+
+    pcall(function()
+        local pos = root.Position
+        root.CFrame = CFrame.new(pos) * rotation
+    end)
+
+    if cameraCF and camera then
+        pcall(function()
+            camera.CFrame = cameraCF
+        end)
+    end
+end
+
+function S:RestoreAutoRotate()
+    local hum = self.State.AutoRotateHumanoid
+    if hum and hum.Parent and self.State.SavedAutoRotate ~= nil then
+        pcall(function()
+            hum.AutoRotate = self.State.SavedAutoRotate
+        end)
+    end
+    self.State.AutoRotateHumanoid = nil
+    self.State.SavedAutoRotate = nil
+end
+
+function S:IsDevKageMenuOpen()
+    if not self.Config.SyncWithDevKage then
+        return self.State.FallbackVisible, false
+    end
+    local fn = ENV.InstanceIsMenuOpen
+    if type(fn) == "function" then
+        local ok, value = pcall(fn)
+        if ok then
+            return value == true, true
+        end
+    end
+    return self.State.FallbackVisible, false
+end
+
+function S:GetAccent()
+    local library = ENV.Library
+    if type(library) == "table" and typeof(library.AccentColor) == "Color3" then
+        return library.AccentColor
+    end
+    return Color3.fromRGB(0, 200, 255)
+end
+
+function S:ApplyAccent()
+    local accent = self:GetAccent()
+    for object, property in pairs(self.AccentObjects) do
+        if object and object.Parent then
+            pcall(function()
+                object[property] = accent
+            end)
+        else
+            self.AccentObjects[object] = nil
+        end
+    end
+end
+
+function S:Accent(object, property)
+    if object then
+        self.AccentObjects[object] = property or "BackgroundColor3"
+        pcall(function()
+            object[property or "BackgroundColor3"] = self:GetAccent()
+        end)
+    end
+    return object
+end
+
+function S:Font()
+    local fn = ENV.InstanceGetUiFont
+    if type(fn) == "function" then
+        local ok, value = pcall(fn)
+        if ok and value then return value end
+    end
+    return Enum.Font.Roboto
+end
+
+function S:Create(className, props)
+    local obj = Instance.new(className)
+    for k, v in pairs(props or {}) do
+        pcall(function()
+            if k == "Font" and typeof(v) == "Font" then
+                obj.FontFace = v
+            else
+                obj[k] = v
+            end
+        end)
+    end
+    return obj
+end
+
+function S:MakeText(parent, text, size, z)
+    return self:Create("TextLabel", {
+        Parent = parent,
+        BackgroundTransparency = 1,
+        Text = text or "",
+        TextColor3 = Color3.fromRGB(235, 235, 235),
+        TextSize = size or 13,
+        Font = self:Font(),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        ZIndex = z or 5,
+    })
+end
+
+function S:BuildGui()
+    if self.Gui then
+        pcall(function() self.Gui:Destroy() end)
+    end
+
+    local parent
+    pcall(function()
+        parent = (gethui and gethui()) or self.Services.CoreGui
+    end)
+    parent = parent or self.Services.CoreGui
+
+    local old = parent:FindFirstChild("DevKageVoidSuiteUI")
+    if old then pcall(function() old:Destroy() end) end
+
+    local gui = self:Create("ScreenGui", {
+        Name = "DevKageVoidSuiteUI",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Global,
+        DisplayOrder = 2147483645,
+        Enabled = false,
+        Parent = parent,
+    })
+    self.Gui = gui
+
+    local main = self:Create("Frame", {
+        Name = "Holder",
+        Parent = gui,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.72, 0, 0.5, 0),
+        Size = UDim2.fromOffset(438, 374),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BorderColor3 = Color3.fromRGB(0, 0, 0),
+        BorderSizePixel = 1,
+        Active = true,
+        ZIndex = 2,
+    })
+    self.MainFrame = main
+
+    local inner = self:Create("Frame", {
+        Parent = main,
+        Position = UDim2.fromOffset(2, 2),
+        Size = UDim2.new(1, -4, 1, -4),
+        BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+        BorderColor3 = Color3.fromRGB(50, 50, 50),
+        BorderSizePixel = 1,
+        ZIndex = 3,
+    })
+
+    local accentLine = self:Create("Frame", {
+        Parent = inner,
+        Position = UDim2.fromOffset(0, 0),
+        Size = UDim2.new(1, 0, 0, 2),
+        BorderSizePixel = 0,
+        ZIndex = 7,
+    })
+    self:Accent(accentLine)
+
+    local header = self:Create("Frame", {
+        Parent = inner,
+        Position = UDim2.fromOffset(0, 2),
+        Size = UDim2.new(1, 0, 0, 28),
+        BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+        BorderSizePixel = 0,
+        Active = true,
+        ZIndex = 5,
+    })
+
+    local title = self:MakeText(header, "devkage // void suite", 14, 7)
+    title.Position = UDim2.fromOffset(8, 0)
+    title.Size = UDim2.new(1, -110, 1, 0)
+
+    local right = self:MakeText(header, "Rivals  v" .. self.Version, 12, 7)
+    right.AnchorPoint = Vector2.new(1, 0)
+    right.Position = UDim2.new(1, -8, 0, 0)
+    right.Size = UDim2.fromOffset(100, 28)
+    right.TextXAlignment = Enum.TextXAlignment.Right
+    right.TextColor3 = Color3.fromRGB(210, 80, 80)
+
+    local tabBar = self:Create("Frame", {
+        Parent = inner,
+        Position = UDim2.fromOffset(6, 34),
+        Size = UDim2.new(1, -12, 0, 25),
+        BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+        BorderColor3 = Color3.fromRGB(45, 45, 45),
+        ZIndex = 5,
+    })
+
+    local content = self:Create("Frame", {
+        Parent = inner,
+        Position = UDim2.fromOffset(6, 64),
+        Size = UDim2.new(1, -12, 1, -91),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BorderColor3 = Color3.fromRGB(45, 45, 45),
+        ZIndex = 4,
+    })
+
+    local status = self:MakeText(inner, "status: booting", 11, 7)
+    status.Position = UDim2.new(0, 8, 1, -23)
+    status.Size = UDim2.new(1, -16, 0, 18)
+    status.TextColor3 = Color3.fromRGB(160, 160, 160)
+    self.StatusLabel = status
+
+    self.Tabs = {}
+    self.Controls = {}
+    self.ControlRefreshers = {}
+
+    local names = { "void", "spin", "misc" }
+    for i, name in ipairs(names) do
+        local button = self:Create("TextButton", {
+            Parent = tabBar,
+            Position = UDim2.new((i - 1) / #names, 0, 0, 0),
+            Size = UDim2.new(1 / #names, 0, 1, 0),
+            BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+            BorderSizePixel = 0,
+            Text = name,
+            TextColor3 = Color3.fromRGB(185, 185, 185),
+            TextSize = 12,
+            Font = self:Font(),
+            AutoButtonColor = false,
+            ZIndex = 6,
+        })
+        local underline = self:Create("Frame", {
+            Parent = button,
+            AnchorPoint = Vector2.new(0, 1),
+            Position = UDim2.new(0, 0, 1, 0),
+            Size = UDim2.new(1, 0, 0, 2),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ZIndex = 7,
+        })
+        self:Accent(underline)
+
+        local page = self:Create("ScrollingFrame", {
+            Parent = content,
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.fromScale(1, 1),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            CanvasSize = UDim2.fromOffset(0, 0),
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            ScrollBarThickness = 3,
+            ScrollBarImageColor3 = self:GetAccent(),
+            Visible = i == 1,
+            ZIndex = 5,
+        })
+        self:Accent(page, "ScrollBarImageColor3")
+        local layout = self:Create("UIListLayout", {
+            Parent = page,
+            Padding = UDim.new(0, 4),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        })
+        self:Create("UIPadding", {
+            Parent = page,
+            PaddingTop = UDim.new(0, 6),
+            PaddingBottom = UDim.new(0, 6),
+            PaddingLeft = UDim.new(0, 7),
+            PaddingRight = UDim.new(0, 7),
+        })
+
+        self.Tabs[name] = { button = button, underline = underline, page = page }
+        self:Track(button.MouseButton1Click:Connect(function()
+            self:SelectTab(name)
+        end))
+    end
+
+    self:MakeDraggable(header, main)
+    self:BuildVoidTab(self.Tabs.void.page)
+    self:BuildSpinTab(self.Tabs.spin.page)
+    self:BuildMiscTab(self.Tabs.misc.page)
+    self:SelectTab("void")
+    self:RefreshAllControls()
+end
+
+function S:SelectTab(name)
+    for tabName, tab in pairs(self.Tabs or {}) do
+        local selected = tabName == name
+        tab.page.Visible = selected
+        tab.button.TextColor3 = selected and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(165, 165, 165)
+        tab.underline.BackgroundTransparency = selected and 0 or 1
+    end
+end
+
+function S:MakeDraggable(handle, frame)
+    local dragging = false
+    local dragStart, startPos
+    self:Track(handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+        end
+    end))
+    self:Track(self.Services.UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end))
+    self:Track(self.Services.UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end))
+end
+
+function S:Row(parent, height)
+    return self:Create("Frame", {
+        Parent = parent,
+        Size = UDim2.new(1, 0, 0, height or 28),
+        BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+        BorderColor3 = Color3.fromRGB(47, 47, 47),
+        ZIndex = 6,
+    })
+end
+
+function S:AddSection(parent, text)
+    local row = self:Create("Frame", {
+        Parent = parent,
+        Size = UDim2.new(1, 0, 0, 20),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    })
+    local line = self:Create("Frame", {
+        Parent = row,
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = Color3.fromRGB(48, 48, 48),
+        BorderSizePixel = 0,
+        ZIndex = 6,
+    })
+    local label = self:MakeText(row, "  " .. text .. "  ", 11, 7)
+    label.AutomaticSize = Enum.AutomaticSize.X
+    label.Size = UDim2.fromOffset(0, 20)
+    label.Position = UDim2.fromOffset(6, 0)
+    label.BackgroundTransparency = 0
+    label.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    return row
+end
+
+function S:AddToggle(parent, key, text, callback)
+    local row = self:Row(parent, 27)
+    local label = self:MakeText(row, text, 12, 7)
+    label.Position = UDim2.fromOffset(8, 0)
+    label.Size = UDim2.new(1, -45, 1, 0)
+
+    local button = self:Create("TextButton", {
+        Parent = row,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -8, 0.5, 0),
+        Size = UDim2.fromOffset(18, 18),
+        BackgroundColor3 = Color3.fromRGB(15, 15, 15),
+        BorderColor3 = Color3.fromRGB(65, 65, 65),
+        Text = "",
+        AutoButtonColor = false,
+        ZIndex = 8,
+    })
+    local fill = self:Create("Frame", {
+        Parent = button,
+        Position = UDim2.fromOffset(3, 3),
+        Size = UDim2.new(1, -6, 1, -6),
+        BorderSizePixel = 0,
+        ZIndex = 9,
+    })
+    self:Accent(fill)
+
+    local function refresh()
+        local on = self.Config[key] == true
+        fill.Visible = on
+        button.BorderColor3 = on and self:GetAccent() or Color3.fromRGB(65, 65, 65)
+    end
+    self.ControlRefreshers[#self.ControlRefreshers + 1] = refresh
+
+    self:Track(button.MouseButton1Click:Connect(function()
+        self.Config[key] = not (self.Config[key] == true)
+        refresh()
+        self:SaveConfig()
+        if callback then pcall(callback, self.Config[key]) end
+    end))
+    return row
+end
+
+function S:AddSlider(parent, key, text, minValue, maxValue, step, suffix, callback)
+    local row = self:Row(parent, 42)
+    local label = self:MakeText(row, text, 11, 7)
+    label.Position = UDim2.fromOffset(8, 0)
+    label.Size = UDim2.new(1, -110, 0, 20)
+
+    local valueLabel = self:MakeText(row, "", 11, 7)
+    valueLabel.AnchorPoint = Vector2.new(1, 0)
+    valueLabel.Position = UDim2.new(1, -8, 0, 0)
+    valueLabel.Size = UDim2.fromOffset(95, 20)
+    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+    local minus = self:Create("TextButton", {
+        Parent = row,
+        Position = UDim2.fromOffset(8, 22),
+        Size = UDim2.fromOffset(18, 15),
+        BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+        BorderColor3 = Color3.fromRGB(55, 55, 55),
+        Text = "-",
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 13,
+        Font = self:Font(),
+        ZIndex = 8,
+    })
+    local plus = self:Create("TextButton", {
+        Parent = row,
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, -8, 0, 22),
+        Size = UDim2.fromOffset(18, 15),
+        BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+        BorderColor3 = Color3.fromRGB(55, 55, 55),
+        Text = "+",
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 13,
+        Font = self:Font(),
+        ZIndex = 8,
+    })
+
+    local bar = self:Create("Frame", {
+        Parent = row,
+        Position = UDim2.fromOffset(31, 25),
+        Size = UDim2.new(1, -62, 0, 8),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+        BorderColor3 = Color3.fromRGB(55, 55, 55),
+        Active = true,
+        ZIndex = 7,
+    })
+    local fill = self:Create("Frame", {
+        Parent = bar,
+        Size = UDim2.new(0, 0, 1, 0),
+        BorderSizePixel = 0,
+        ZIndex = 8,
+    })
+    self:Accent(fill)
+
+    local dragging = false
+    local function quantize(value)
+        value = math.clamp(value, minValue, maxValue)
+        step = step or 1
+        if step > 0 then
+            value = math.floor((value / step) + 0.5) * step
+        end
+        return math.clamp(value, minValue, maxValue)
+    end
+    local function set(value, save)
+        value = quantize(value)
+        self.Config[key] = value
+        local frac = (value - minValue) / math.max(maxValue - minValue, 0.0001)
+        fill.Size = UDim2.new(frac, 0, 1, 0)
+        local decimals = (step and step < 1) and 2 or 0
+        valueLabel.Text = string.format("%." .. decimals .. "f%s", value, suffix or "")
+        if callback then pcall(callback, value) end
+        if save then self:SaveConfig() end
+    end
+    local function fromMouse()
+        local m = self.Services.UserInputService:GetMouseLocation()
+        local frac = math.clamp((m.X - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+        set(minValue + (maxValue - minValue) * frac, false)
+    end
+    local function refresh()
+        set(tonumber(self.Config[key]) or minValue, false)
+    end
+    self.ControlRefreshers[#self.ControlRefreshers + 1] = refresh
+
+    self:Track(bar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            fromMouse()
+        end
+    end))
+    self:Track(self.Services.UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            fromMouse()
+        end
+    end))
+    self:Track(self.Services.UserInputService.InputEnded:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+            self:SaveConfig()
+        end
+    end))
+    self:Track(minus.MouseButton1Click:Connect(function()
+        set((tonumber(self.Config[key]) or minValue) - (step or 1), true)
+    end))
+    self:Track(plus.MouseButton1Click:Connect(function()
+        set((tonumber(self.Config[key]) or minValue) + (step or 1), true)
+    end))
+    return row
+end
+
+function S:AddCycle(parent, key, text, values, callback)
+    local row = self:Row(parent, 27)
+    local label = self:MakeText(row, text, 12, 7)
+    label.Position = UDim2.fromOffset(8, 0)
+    label.Size = UDim2.new(0.55, -8, 1, 0)
+
+    local button = self:Create("TextButton", {
+        Parent = row,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -8, 0.5, 0),
+        Size = UDim2.new(0.43, 0, 0, 19),
+        BackgroundColor3 = Color3.fromRGB(17, 17, 17),
+        BorderColor3 = Color3.fromRGB(55, 55, 55),
+        Text = "",
+        TextColor3 = Color3.fromRGB(220, 220, 220),
+        TextSize = 11,
+        Font = self:Font(),
+        AutoButtonColor = false,
+        ZIndex = 8,
+    })
+
+    local function refresh()
+        button.Text = tostring(self.Config[key])
+    end
+    self.ControlRefreshers[#self.ControlRefreshers + 1] = refresh
+
+    self:Track(button.MouseButton1Click:Connect(function()
+        local current = self.Config[key]
+        local idx = 1
+        for i, v in ipairs(values) do
+            if v == current then idx = i break end
+        end
+        idx = (idx % #values) + 1
+        self.Config[key] = values[idx]
+        refresh()
+        self:SaveConfig()
+        if callback then pcall(callback, self.Config[key]) end
+    end))
+    return row
+end
+
+function S:AddButton(parent, text, callback, risky)
+    local row = self:Row(parent, 28)
+    local button = self:Create("TextButton", {
+        Parent = row,
+        Position = UDim2.fromOffset(5, 4),
+        Size = UDim2.new(1, -10, 1, -8),
+        BackgroundColor3 = risky and Color3.fromRGB(55, 24, 24) or Color3.fromRGB(18, 18, 18),
+        BorderColor3 = risky and Color3.fromRGB(115, 48, 48) or Color3.fromRGB(60, 60, 60),
+        Text = text,
+        TextColor3 = Color3.fromRGB(225, 225, 225),
+        TextSize = 11,
+        Font = self:Font(),
+        AutoButtonColor = false,
+        ZIndex = 8,
+    })
+    self:Track(button.MouseButton1Click:Connect(function()
+        if callback then pcall(callback) end
+    end))
+    return row
+end
+
+function S:BuildVoidTab(page)
+    self:AddSection(page, "void spam")
+    self:AddToggle(page, "Enabled", "void spam", function(on)
+        if on then
+            self:SetPhase("attack")
+        else
+            self:ResetVoidState(true)
+        end
+    end)
+    self:AddCycle(page, "VoidKey", "toggle key", { "V", "C", "X", "Z", "G", "T", "None" })
+    self:AddCycle(page, "VoidMode", "void mode", { "Deep", "Random", "Sky", "Extreme" })
+    self:AddSlider(page, "AttackTime", "attack / visible time", 0.05, 2.5, 0.05, "s")
+    self:AddSlider(page, "HideTime", "hide / void time", 0.03, 2.0, 0.01, "s")
+    self:AddToggle(page, "RandomTiming", "randomize timing")
+    self:AddSlider(page, "TimingVariance", "timing variance", 0, 0.75, 0.01, "")
+    self:AddSlider(page, "VoidDepth", "void depth", 500, 1000000, 500, "")
+    self:AddSlider(page, "VoidRange", "random x/z range", 100, 25000, 100, "")
+    self:AddToggle(page, "VelocityNoise", "velocity noise")
+    self:AddSlider(page, "VelocityNoiseAmount", "velocity noise power", 0, 10000, 100, "")
+
+    self:AddSection(page, "void prediction")
+    self:AddToggle(page, "VoidPrediction", "void prediction")
+    self:AddSlider(page, "PredictionMultiplier", "prediction multiplier", 0.1, 3.0, 0.05, "x")
+    self:AddSlider(page, "PredictionSmoothing", "velocity smoothing", 0, 0.95, 0.01, "")
+    self:AddSlider(page, "PredictionMaxLead", "max lead time", 0, 1.0, 0.01, "s")
+    self:AddSlider(page, "MaxPredictionStuds", "max prediction distance", 0, 80, 1, "st")
+    self:AddToggle(page, "PingAssist", "ping compensation")
+    self:AddSlider(page, "PingFactor", "ping factor", 0, 2.5, 0.05, "x")
+    self:AddToggle(page, "ProjectileAssist", "travel-time prediction")
+    self:AddSlider(page, "ProjectileSpeed", "projectile speed", 100, 10000, 50, "")
+
+    self:AddSection(page, "safety")
+    self:AddToggle(page, "RespectOtherMovement", "respect other movement scripts")
+    self:AddToggle(page, "AutoRecover", "auto recover")
+    self:AddToggle(page, "RespawnProof", "respawn proof")
+end
+
+function S:BuildSpinTab(page)
+    self:AddSection(page, "spinbot")
+    self:AddToggle(page, "SpinEnabled", "spinbot", function(on)
+        if not on then self:RestoreAutoRotate() end
+    end)
+    self:AddCycle(page, "SpinKey", "toggle key", { "B", "N", "M", "H", "J", "K", "None" })
+    self:AddCycle(page, "SpinMode", "yaw mode", { "Spin", "Jitter", "Random", "Sway" })
+    self:AddCycle(page, "SpinDirection", "direction", { "Right", "Left" })
+    self:AddSlider(page, "SpinSpeed", "spin speed", 0, 3600, 10, "°/s")
+    self:AddSlider(page, "SpinRange", "yaw range", 0, 360, 1, "°")
+    self:AddSlider(page, "JitterInterval", "jitter interval", 0.01, 0.5, 0.01, "s")
+    self:AddSlider(page, "RandomInterval", "random interval", 0.01, 0.5, 0.01, "s")
+
+    self:AddSection(page, "pitch / roll")
+    self:AddCycle(page, "PitchMode", "pitch mode", { "None", "Up", "Down", "Sine", "Jitter" })
+    self:AddSlider(page, "PitchAmount", "pitch amount", 0, 89, 1, "°")
+    self:AddCycle(page, "RollMode", "roll mode", { "None", "Tilt", "Spin", "Sway" })
+    self:AddSlider(page, "RollAmount", "roll amount", 0, 180, 1, "°")
+
+    self:AddSection(page, "behavior")
+    self:AddToggle(page, "SpinOnlyWhileVoid", "spin only while hidden")
+    self:AddToggle(page, "CameraSafe", "keep camera steady")
+    self:AddToggle(page, "DisableAutoRotate", "disable humanoid autorotate")
+end
+
+function S:BuildMiscTab(page)
+    self:AddSection(page, "coexistence")
+    self:AddToggle(page, "SyncWithDevKage", "mirror main devkage ui")
+    self:AddCycle(page, "FallbackUiKey", "standalone ui key", { "RightAlt", "RightShift", "Insert", "Home" })
+    self:AddToggle(page, "SaveSettings", "save settings")
+    self:AddToggle(page, "ShowStatus", "show runtime status")
+
+    self:AddSection(page, "runtime api")
+    self:AddButton(page, "copy prediction api name", function()
+        if setclipboard then pcall(setclipboard, "getgenv().DevKageVoidPredict(part, origin)") end
+    end)
+    self:AddButton(page, "copy visible-origin api name", function()
+        if setclipboard then pcall(setclipboard, "getgenv().DevKageVoidOrigin()") end
+    end)
+    self:AddButton(page, "force fighter refresh", function()
+        self:RefreshFighterController()
+    end)
+    self:AddButton(page, "reset settings", function()
+        self:ResetConfig()
+    end)
+    self:AddButton(page, "panic / unload companion", function()
+        self:Unload("panic")
+    end, true)
+end
+
+function S:RefreshAllControls()
+    for _, fn in ipairs(self.ControlRefreshers or {}) do
+        pcall(fn)
+    end
+end
+
+function S:UpdateUi(dt)
+    if not self.Gui then return end
+    local now = os.clock()
+
+    if now - self.State.LastUiSync >= 0.05 then
+        self.State.LastUiSync = now
+        local open, linked = self:IsDevKageMenuOpen()
+        self.State.MainMenuLinked = linked
+        self.State.GuiOpen = open
+        self.Gui.Enabled = open
+    end
+
+    if now - self.State.LastThemeUpdate >= 0.20 then
+        self.State.LastThemeUpdate = now
+        self:ApplyAccent()
+    end
+
+    if self.StatusLabel then
+        if not self.Config.ShowStatus then
+            self.StatusLabel.Text = ""
+            return
+        end
+        local ping = math.floor(self:GetPing() * 1000 + 0.5)
+        local mask = (ENV.__DevKageMaskShard and "mask:on") or "mask:off"
+        local menu = self.State.MainMenuLinked and "ui:linked" or "ui:standalone"
+        local phase = self.Config.Enabled and self.State.Phase or "off"
+        local spin = self.Config.SpinEnabled and self.Config.SpinMode or "off"
+        self.StatusLabel.Text = string.format(
+            "void:%s | spin:%s | %dms | %s | %s | root:%s",
+            phase,
+            spin,
+            ping,
+            mask,
+            menu,
+            self.State.FighterSource or "?"
+        )
+    end
+end
+
+function S:HandleKey(input, processed)
+    if processed then return end
+    if self.Services.UserInputService:GetFocusedTextBox() then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+
+    local name = input.KeyCode.Name
+    if self.Config.VoidKey ~= "None" and name == self.Config.VoidKey then
+        self.Config.Enabled = not self.Config.Enabled
+        if self.Config.Enabled then self:SetPhase("attack") else self:ResetVoidState(true) end
+        self:SaveConfig()
+        self:RefreshAllControls()
+        return
+    end
+
+    if self.Config.SpinKey ~= "None" and name == self.Config.SpinKey then
+        self.Config.SpinEnabled = not self.Config.SpinEnabled
+        if not self.Config.SpinEnabled then self:RestoreAutoRotate() end
+        self:SaveConfig()
+        self:RefreshAllControls()
+        return
+    end
+
+    if name == self.Config.FallbackUiKey and not self.State.MainMenuLinked then
+        self.State.FallbackVisible = not self.State.FallbackVisible
+    end
+end
+
+function S:OnCharacterAdded()
+    self:ResetVoidState(false)
+    self:RestoreAutoRotate()
+    task.delay(0.5, function()
+        if not self.Running then return end
+        self:RefreshFighterController()
+    end)
+end
+
+function S:RegisterMaskShard()
+    local mask = ENV.__DevKageMaskShard
+    if type(mask) ~= "table" or type(mask.Runtime) ~= "table" then return end
+    self.MaskPredictionExport = function(part, origin)
+        return self:PredictPart(part, origin)
+    end
+    mask.Runtime.VoidSuite = self
+    mask.Runtime.VoidPrediction = self.MaskPredictionExport
+end
+
+function S:UnregisterMaskShard()
+    local mask = ENV.__DevKageMaskShard
+    if type(mask) == "table" and type(mask.Runtime) == "table" then
+        if mask.Runtime.VoidSuite == self then mask.Runtime.VoidSuite = nil end
+        if mask.Runtime.VoidPrediction == self.MaskPredictionExport then
+            mask.Runtime.VoidPrediction = nil
+        end
+    end
+    self.MaskPredictionExport = nil
+end
+
+function S:StartLoops()
+    self:Track(self.Services.RunService.Heartbeat:Connect(function(dt)
+        if not self.Running then return end
+        local ok, err = pcall(function()
+            self:UpdateVoid(dt or 0)
+        end)
+        if not ok then
+            self.State.LastError = tostring(err)
+            if self.Config.AutoRecover then
+                pcall(function() self:RestoreLocal(true) end)
+            end
+        end
+    end))
+
+    self:Bind("DK_VoidSuite_LocalRestore", Enum.RenderPriority.Camera.Value - 8, function(dt)
+        if not self.Running then return end
+        if self.State.Snap then
+            self:RestoreLocal(false)
+        end
+    end)
+
+    self:Bind("DK_VoidSuite_Spin", Enum.RenderPriority.Camera.Value + 2, function(dt)
+        if not self.Running then return end
+        self:UpdateSpin(dt or 0)
+    end)
+
+    self:Bind("DK_VoidSuite_UI", Enum.RenderPriority.Last.Value + 4, function(dt)
+        if not self.Running then return end
+        self:UpdateUi(dt or 0)
+    end)
+end
+
+function S:Unload(reason)
+    if not self.Running then return end
+    self.Running = false
+    pcall(function() self:RestoreLocal(true) end)
+    pcall(function() self:RestoreAutoRotate() end)
+    self:UnbindAll()
+    self:DisconnectAll()
+    self:UnregisterMaskShard()
+
+    if self.Gui then
+        pcall(function() self.Gui:Destroy() end)
+        self.Gui = nil
+    end
+
+    if ENV.DevKageVoidSuite == self then
+        ENV.DevKageVoidSuite = nil
+    end
+    if ENV.DevKageVoidPredict == self.PredictionExport then
+        ENV.DevKageVoidPredict = nil
+    end
+    if ENV.DevKageVoidOrigin == self.OriginExport then
+        ENV.DevKageVoidOrigin = nil
+    end
+end
+
+function S:BootStep(name, callback)
+    self.State.LastStatus = "boot:" .. tostring(name)
+    local ok, result = pcall(callback)
+    if not ok then
+        error("[VoidSuite boot:" .. tostring(name) .. "] " .. tostring(result), 0)
+    end
+    return result
+end
+
+function S:Init()
+    self:BootStep("config", function()
+        self:LoadConfig()
+        self:SetPhase("attack")
+    end)
+
+    self:BootStep("player", function()
+        self.Player = self.Services.Players.LocalPlayer or self.Services.Players.PlayerAdded:Wait()
+        if not game:IsLoaded() then
+            game.Loaded:Wait()
+        end
+    end)
+    if not self.Running then return end
+
+    self:BootStep("controllers", function()
+        local playerScripts = self.Player:WaitForChild("PlayerScripts", 15)
+        if playerScripts then
+            playerScripts:WaitForChild("Controllers", 8)
+        end
+        self:RefreshFighterController()
+    end)
+
+    self:BootStep("ui", function()
+        self:BuildGui()
+    end)
+
+    self:BootStep("maskshard", function()
+        self:RegisterMaskShard()
+    end)
+
+    self:BootStep("exports", function()
+        self.PredictionExport = function(part, origin)
+            return self:PredictPart(part, origin)
+        end
+        self.OriginExport = function()
+            return self:GetVisibleOrigin()
+        end
+        ENV.DevKageVoidPredict = self.PredictionExport
+        ENV.DevKageVoidOrigin = self.OriginExport
+    end)
+
+    self:BootStep("signals", function()
+        self:Track(self.Services.UserInputService.InputBegan:Connect(function(input, processed)
+            self:HandleKey(input, processed)
+        end))
+
+        self:Track(self.Player.CharacterAdded:Connect(function()
+            if self.Config.RespawnProof then
+                self:OnCharacterAdded()
+            else
+                self:ResetVoidState(true)
+            end
+        end))
+
+        self:Track(self.Services.Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+            -- Listener only; no camera function is replaced.
+        end))
+    end)
+
+    self:BootStep("loops", function()
+        self:StartLoops()
+    end)
+
+    self.Ready = true
+    self.State.LastStatus = "ready"
+end
+
+task.spawn(function()
+    local ok, err = pcall(function()
+        S:Init()
+    end)
+    if not ok then
+        S.State.LastError = tostring(err)
+        S.State.LastStatus = "error"
+        pcall(function()
+            warn("[DevKage Void Suite] " .. tostring(err))
+        end)
+        if S.Config and S.Config.AutoRecover then
+            pcall(function() S:RestoreLocal(true) end)
+        end
+    end
+end)
+
+return S
