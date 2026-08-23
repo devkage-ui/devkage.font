@@ -1,12 +1,12 @@
 --[[
-    DevKage Void Suite Companion v1.2
+    DevKage Void Suite Companion v1.3
     Standalone / coexistence-first companion for DevKage + MaskShard.
 
     Goals:
-      * Rage bot with match-aware targeting, weapon selection, prediction and void sync.
+      * Shared-state HvH core: rage, silent aim, void, server-origin prediction and anti-aim.
       * Void spam with local visual restore.
       * Void/self prediction + reusable target prediction API.
-      * Feature-rich spinbot without replacing CameraController or weapon-module functions.
+      * Coexistence-first anti-aim/spinbot without replacing CameraController or weapon-module functions.
       * Small DevKage-style UI that mirrors the main DevKage menu.
       * Safe reruns and coexistence with other executor scripts.
 
@@ -15,6 +15,8 @@
       getgenv().DevKageVoidPredict(part, origin)
       getgenv().DevKageVoidOrigin()
       getgenv().DevKageRageBot
+      getgenv().DevKageSilentAim
+      getgenv().DevKageAntiAim
 --]]
 
 local ENV = _G
@@ -37,7 +39,7 @@ end
 
 local S = {
     Name = "DevKage Void Suite",
-    Version = "1.2.0",
+    Version = "1.3.0",
     Running = true,
     Ready = false,
     Connections = {},
@@ -62,15 +64,23 @@ S.Services = {
 S.Player = S.Services.Players.LocalPlayer
 
 S.Defaults = {
+    -- Core / coexistence
+    CoexistenceMode = "Enhance", -- Enhance = auto-backoff, Standalone = own root, Passive = never own root
+    CoexistenceBootDelay = 1.00,
+    ExternalBackoff = 0.35,
+    ExternalDesyncThreshold = 80,
+    UseExternalServerOrigin = true,
+    RespectOtherMovement = true,
+    AutoRecover = true,
+    RespawnProof = true,
+
+    -- Void / server desync
     Enabled = false,
     VoidKey = "V",
-    SpinKey = "B",
-
     AttackTime = 0.85,
     HideTime = 0.30,
     RandomTiming = true,
     TimingVariance = 0.18,
-
     VoidMode = "Deep",
     VoidDepth = 250000,
     VoidRange = 9000,
@@ -78,6 +88,7 @@ S.Defaults = {
     VelocityNoise = false,
     VelocityNoiseAmount = 2500,
 
+    -- Shared prediction
     VoidPrediction = true,
     PredictionMultiplier = 1.20,
     PredictionSmoothing = 0.58,
@@ -87,10 +98,6 @@ S.Defaults = {
     ProjectileAssist = true,
     ProjectileSpeed = 3000,
     MaxPredictionStuds = 18,
-
-    RespectOtherMovement = true,
-    AutoRecover = true,
-    RespawnProof = true,
 
     -- Rage bot
     RageEnabled = false,
@@ -105,18 +112,67 @@ S.Defaults = {
     RageReacquireDelay = 0.08,
     RageTeamCheck = true,
     RageRespectImmune = true,
-    RageMatchOnly = true,
+    RageMatchOnly = false,
     RageHitPart = "Head",
     RageWeaponPick = "Primary",
-    RageForceWeapon = true,
+    RageAttackMode = "Auto",
+    RageForceWeapon = false,
     RageShootAttempts = 1,
     RageShotInterval = 0.05,
+    RageUseWeaponCooldown = true,
+    RagePingGate = true,
+    RageInputAssist = false,
     RagePrediction = true,
     RagePredictionScale = 1.00,
     RageVoidSync = true,
-    RageOrigin = "Visible",
+    RageOrigin = "Auto",
+    RageAttackPosition = "Current",
+    RageAttackForward = 2.0,
+    RageAttackHeight = 0.0,
+    RageOrbitRadius = 0.0,
+    RageOrbitSpeed = 7.0,
 
+    -- Silent aim / fallback fire
+    SilentEnabled = false,
+    SilentKey = "T",
+    SilentAutoShoot = false,
+    SilentUseRageTarget = true,
+    SilentTargetMode = "Cursor",
+    SilentFOV = 800,
+    SilentMaxDistance = 3000,
+    SilentRequireOnScreen = true,
+    SilentTeamCheck = true,
+    SilentRespectImmune = true,
+    SilentHitChance = 100,
+    SilentHitPart = "Head",
+    SilentPrediction = true,
+    SilentPredictionScale = 1.00,
+    SilentShotInterval = 0.05,
+    SilentOrigin = "Auto",
+    SilentOnlyWhenMouseDown = true,
+    SilentManipulation = false,
+    SilentManipulationForward = 5.0,
+    SilentManipulationHeight = 5.0,
+
+    -- Network anti-aim
+    AntiAimEnabled = false,
+    AntiAimKey = "Y",
+    AntiAimYaw = "Jitter",
+    AntiAimYawAngle = 180,
+    AntiAimJitterAngle = 180,
+    AntiAimSpeed = 36,
+    AntiAimPitch = "Random",
+    AntiAimPitchAngle = 89,
+    AntiAimRoll = "None",
+    AntiAimRollAngle = 0,
+    AntiAimOnlyCombat = true,
+    AntiAimOnlyAttack = false,
+    AntiAimUnderground = false,
+    AntiAimUndergroundDepth = 2.0,
+
+    -- Legacy spin layer; now applied to server CFrame, not local camera/root render
     SpinEnabled = false,
+    SpinKey = "B",
     SpinMode = "Spin",
     SpinDirection = "Right",
     SpinSpeed = 720,
@@ -131,6 +187,7 @@ S.Defaults = {
     CameraSafe = true,
     DisableAutoRotate = true,
 
+    -- UI / persistence
     SyncWithDevKage = true,
     FallbackUiKey = "RightAlt",
     SaveSettings = true,
@@ -146,14 +203,68 @@ S.State = {
     Phase = "attack",
     PhaseStarted = 0,
     PhaseDuration = 0,
+
+    -- local/server CFrame state
     LastRoot = nil,
     Snap = nil,
     VisibleCF = nil,
     VisibleLV = Vector3.zero,
     VisibleAV = Vector3.zero,
+    LocalRestoreCF = nil,
+    LocalRestoreLV = Vector3.zero,
+    LocalRestoreAV = Vector3.zero,
+    ServerCF = nil,
+    LastOwnServerCF = nil,
+    OwnRootFrame = false,
+    OwnsRoot = false,
+    ExternalServerCF = nil,
+    ExternalOwnerUntil = 0,
+    ExternalDetected = false,
+    ExternalReason = nil,
+    LastObservedCF = nil,
+    LastPostSimulation = 0,
+
     SmoothedSelfVelocity = Vector3.zero,
     LastVisiblePosition = nil,
     LastVisibleSample = 0,
+
+    -- target velocity / combat state
+    FighterController = nil,
+    FighterSource = "character",
+    EnumLibrary = nil,
+    Utility = nil,
+    MechanicsController = nil,
+    RageTarget = nil,
+    RageTargetPlayer = nil,
+    RageLastAcquire = 0,
+    RageLastShot = 0,
+    RageLastEquip = 0,
+    RageLastFinish = 0,
+    RageLastStatus = "off",
+    RageLastTargetName = "-",
+    RageLastTargetHP = 0,
+    RageLastFireError = nil,
+    RageOrbitAngle = 0,
+    SilentTarget = nil,
+    SilentTargetPlayer = nil,
+    SilentLastAcquire = 0,
+    SilentLastShot = 0,
+    SilentLastStatus = "off",
+    SilentLastTargetName = "-",
+    SilentLastFireError = nil,
+    LastCombatShot = 0,
+
+    -- anti aim / spin state
+    AntiAimSpinAngle = 0,
+    AntiAimJitterAngle = 0,
+    AntiAimNextJitter = 0,
+    AntiAimRandomYaw = 0,
+    AntiAimNextRandom = 0,
+    AntiAimRandomPitch = 0,
+    AntiAimNextPitch = 0,
+    FloorCachePos = nil,
+    FloorCacheCF = nil,
+    FloorCacheAt = 0,
     SpinAngle = 0,
     RollAngle = 0,
     JitterSign = 1,
@@ -162,19 +273,8 @@ S.State = {
     RandomNext = 0,
     SavedAutoRotate = nil,
     AutoRotateHumanoid = nil,
-    FighterController = nil,
-    FighterSource = "character",
-    EnumLibrary = nil,
-    Utility = nil,
-    RageTarget = nil,
-    RageTargetPlayer = nil,
-    RageLastAcquire = 0,
-    RageLastShot = 0,
-    RageLastEquip = 0,
-    RageLastStatus = "off",
-    RageLastTargetName = "-",
-    RageLastTargetHP = 0,
-    RageLastFireError = nil,
+
+    -- runtime / UI
     LastError = nil,
     LastStatus = "booting",
     FallbackVisible = true,
@@ -185,7 +285,8 @@ S.State = {
 }
 
 S.ConfigFolder = "DevKage_Configs"
-S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion.json"
+S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion_v1_3.json"
+S.LegacyConfigPath = S.ConfigFolder .. "/_void_suite_companion.json"
 
 function S:Track(connection)
     if connection then
@@ -355,6 +456,14 @@ function S:RefreshCombatModules()
             self.State.Utility = utility
         end
     end
+
+    local playerScripts = self.Player and self.Player:FindFirstChild("PlayerScripts")
+    local controllers = playerScripts and playerScripts:FindFirstChild("Controllers")
+    local mechanicsRef = controllers and controllers:FindFirstChild("MechanicsController")
+    local mechanics = self:SafeRequireModule(mechanicsRef, 2)
+    if mechanics then
+        self.State.MechanicsController = mechanics
+    end
 end
 
 function S:GetRoot()
@@ -390,6 +499,101 @@ function S:ExternalMovementBusy()
     if rawget(_G, "keyheldcframefly") == true then return true end
     if ENV.__DEVKAGE_LATE_BOOT_WAITING == true then return true end
     return false
+end
+
+
+function S:IsExternalBackoffActive()
+    return os.clock() < (tonumber(self.State.ExternalOwnerUntil) or 0)
+end
+
+function S:MarkExternalOwner(cf, reason)
+    if cf then
+        self.State.ExternalServerCF = cf
+    end
+    self.State.ExternalOwnerUntil = os.clock() + math.max(tonumber(self.Config.ExternalBackoff) or 0.35, 0.05)
+    self.State.ExternalDetected = true
+    self.State.ExternalReason = reason or "external"
+    self.State.OwnsRoot = false
+    self.State.OwnRootFrame = false
+end
+
+function S:DetectExternalServerState(root)
+    if not root or not root.Parent then return false end
+
+    local mode = tostring(self.Config.CoexistenceMode or "Enhance")
+    if mode == "Standalone" then
+        self.State.ExternalDetected = false
+        self.State.ExternalReason = nil
+        return false
+    end
+
+    if self:ExternalMovementBusy() then
+        self:MarkExternalOwner(root.CFrame, "known movement")
+        return true
+    end
+
+    if mode == "Passive" then
+        self.State.ExternalServerCF = root.CFrame
+        self.State.ExternalDetected = true
+        self.State.ExternalReason = "passive"
+        return true
+    end
+
+    local visible = self.State.VisibleCF or self.State.LocalRestoreCF
+    local observed = root.CFrame
+    local threshold = math.max(tonumber(self.Config.ExternalDesyncThreshold) or 80, 10)
+
+    if visible then
+        local displacement = (observed.Position - visible.Position).Magnitude
+        local ownCF = self.State.LastOwnServerCF
+        local looksLikeOurWrite = false
+        if ownCF then
+            looksLikeOurWrite = (observed.Position - ownCF.Position).Magnitude < 6
+        end
+
+        if displacement >= threshold and not looksLikeOurWrite then
+            self:MarkExternalOwner(observed, "server cf")
+            return true
+        end
+    end
+
+    if self:IsExternalBackoffActive() then
+        self.State.ExternalServerCF = observed
+        self.State.ExternalDetected = true
+        return true
+    end
+
+    self.State.ExternalDetected = false
+    self.State.ExternalReason = nil
+    return false
+end
+
+function S:ShouldOwnRoot()
+    local mode = tostring(self.Config.CoexistenceMode or "Enhance")
+    if mode == "Passive" then return false end
+    if mode == "Enhance" and self:IsExternalBackoffActive() then return false end
+    if self:ExternalMovementBusy() then return false end
+
+    local hasRootFeature =
+        self.Config.Enabled
+        or self.Config.AntiAimEnabled
+        or self.Config.SpinEnabled
+        or (self.Config.RageEnabled and tostring(self.Config.RageAttackPosition or "Current") ~= "Current")
+        or (self.Config.SilentEnabled and self.Config.SilentManipulation)
+
+    return hasRootFeature == true
+end
+
+function S:GetObservedServerOrigin()
+    if self.Config.UseExternalServerOrigin and self.State.ExternalServerCF then
+        if self:IsExternalBackoffActive() or tostring(self.Config.CoexistenceMode) == "Passive" then
+            return self.State.ExternalServerCF.Position
+        end
+    end
+    if self.State.ServerCF then
+        return self.State.ServerCF.Position
+    end
+    return nil
 end
 
 function S:RandDuration(base)
@@ -1018,6 +1222,170 @@ function S:ClearRageTarget()
     self.State.RageLastTargetHP = 0
 end
 
+
+function S:IsSilentTeammate(targetPlayer)
+    if not targetPlayer or targetPlayer == self.Player then return true end
+    if not self.Config.SilentTeamCheck then return false end
+
+    local myTeamId = self.Player and self.Player:GetAttribute("TeamID")
+    local theirTeamId = targetPlayer:GetAttribute("TeamID")
+    if myTeamId ~= nil and theirTeamId ~= nil and myTeamId == theirTeamId then
+        return true
+    end
+
+    if self.Player and self.Player.Team and targetPlayer.Team and self.Player.Team == targetPlayer.Team then
+        return true
+    end
+    return false
+end
+
+function S:IsValidSilentTarget(char)
+    if not char or not char.Parent then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root then return false end
+
+    local targetPlayer = self.Services.Players:GetPlayerFromCharacter(char)
+    if not targetPlayer or targetPlayer == self.Player then return false end
+    if self:IsSilentTeammate(targetPlayer) then return false end
+
+    local myRoot = self:GetRoot()
+    local maxDistance = math.max(tonumber(self.Config.SilentMaxDistance) or 3000, 0)
+    if maxDistance > 0 and myRoot and (root.Position - myRoot.Position).Magnitude > maxDistance then
+        return false
+    end
+
+    if self.Config.SilentRequireOnScreen then
+        local _, onScreen = self:WorldToScreen(root.Position)
+        if not onScreen then return false end
+    end
+
+    if self.Config.SilentRespectImmune and self:IsTargetImmune(targetPlayer, char) then
+        return false
+    end
+
+    return true
+end
+
+function S:GetHitPartByName(char, name)
+    if not char then return nil end
+    name = tostring(name or "Head")
+
+    local function fc(n)
+        local part = char:FindFirstChild(n)
+        return part and part:IsA("BasePart") and part or nil
+    end
+
+    if name == "Torso" then
+        return fc("Torso") or fc("UpperTorso") or fc("HumanoidRootPart")
+    elseif name == "Closest" then
+        local camera = self.Services.Workspace.CurrentCamera
+        local camPos = camera and camera.CFrame.Position
+        local camLook = camera and camera.CFrame.LookVector
+        local best, bestD = nil, math.huge
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                local d
+                if camPos and camLook and (part.Position - camPos).Magnitude > 0.001 then
+                    d = 1 - camLook:Dot((part.Position - camPos).Unit)
+                else
+                    local myRoot = self:GetRoot()
+                    d = myRoot and (part.Position - myRoot.Position).Magnitude or 0
+                end
+                if d < bestD then
+                    bestD = d
+                    best = part
+                end
+            end
+        end
+        return best or fc("Head") or fc("HumanoidRootPart")
+    elseif name == "Random" then
+        local parts = {}
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                parts[#parts + 1] = part
+            end
+        end
+        if #parts > 0 then
+            return parts[math.random(1, #parts)]
+        end
+    end
+
+    return fc(name) or fc("Head") or fc("HumanoidRootPart")
+end
+
+function S:GetRageHitPart(char)
+    return self:GetHitPartByName(char, self.Config.RageHitPart)
+end
+
+function S:GetSilentHitPart(char)
+    return self:GetHitPartByName(char, self.Config.SilentHitPart)
+end
+
+function S:ScoreSilentTarget(char)
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return math.huge end
+
+    local mode = tostring(self.Config.SilentTargetMode or "Cursor")
+    if mode == "Distance" then
+        local myRoot = self:GetRoot()
+        return myRoot and (root.Position - myRoot.Position).Magnitude or math.huge
+    elseif mode == "Lowest HP" then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        return hum and hum.Health or math.huge
+    elseif mode == "Random" then
+        return math.random()
+    end
+
+    local point, onScreen = self:WorldToScreen(root.Position)
+    if not point or not onScreen then return math.huge end
+    local cursor = self.Services.UserInputService:GetMouseLocation()
+    local dist = (point - Vector2.new(cursor.X, cursor.Y)).Magnitude
+    local fov = math.max(tonumber(self.Config.SilentFOV) or 800, 0)
+    if fov > 0 and dist > fov then return math.huge end
+    return dist
+end
+
+function S:AcquireSilentTarget(force)
+    if self.Config.SilentUseRageTarget and self:IsValidRageTarget(self.State.RageTarget) then
+        self.State.SilentTarget = self.State.RageTarget
+        self.State.SilentTargetPlayer = self.State.RageTargetPlayer
+        self.State.SilentLastTargetName = self.State.RageLastTargetName or "-"
+        return self.State.SilentTarget
+    end
+
+    local now = os.clock()
+    if not force and now - (self.State.SilentLastAcquire or 0) < 0.04 then
+        return self.State.SilentTarget
+    end
+    self.State.SilentLastAcquire = now
+
+    local bestChar, bestScore = nil, math.huge
+    for _, targetPlayer in ipairs(self.Services.Players:GetPlayers()) do
+        if targetPlayer ~= self.Player and targetPlayer.Character then
+            local char = targetPlayer.Character
+            if self:IsValidSilentTarget(char) then
+                local score = self:ScoreSilentTarget(char)
+                if score < bestScore then
+                    bestScore = score
+                    bestChar = char
+                end
+            end
+        end
+    end
+
+    self.State.SilentTarget = bestChar
+    self.State.SilentTargetPlayer = bestChar and self.Services.Players:GetPlayerFromCharacter(bestChar) or nil
+    self.State.SilentLastTargetName = self.State.SilentTargetPlayer and self.State.SilentTargetPlayer.Name or "-"
+    return bestChar
+end
+
+function S:ClearSilentTarget()
+    self.State.SilentTarget = nil
+    self.State.SilentTargetPlayer = nil
+    self.State.SilentLastTargetName = "-"
+end
+
 function S:GetLocalFighter()
     local fc = self.State.FighterController
     return fc and fc.LocalFighter or nil
@@ -1074,6 +1442,35 @@ function S:GetRageAmmo()
         return nil, nil, true, false
     end
     return current, maximum, false, reloading
+end
+
+
+function S:GetWeaponCooldown()
+    local item = self:GetEquippedItem()
+    if not item then return 0.05 end
+
+    local info = nil
+    pcall(function()
+        info = item.Info
+    end)
+
+    local cooldown
+    if type(info) == "table" then
+        cooldown = tonumber(info.ShootCooldown or info.AttackCooldown or info.Cooldown)
+    end
+    if cooldown == nil then
+        cooldown = tonumber(self:ItemGet(item, "ShootCooldown") or self:ItemGet(item, "AttackCooldown"))
+    end
+    return math.max(cooldown or 0.05, 0.015)
+end
+
+function S:SyncWeaponInput(action)
+    local mechanics = self.State.MechanicsController
+    if not mechanics or type(mechanics.EquippedItemInput) ~= "function" then return false end
+    local ok = pcall(function()
+        mechanics:EquippedItemInput(action)
+    end)
+    return ok
 end
 
 function S:GetDesiredRageSlot()
@@ -1266,16 +1663,41 @@ function S:GetMuzzlePosition()
     return nil
 end
 
-function S:GetRageOrigin()
-    local mode = self.Config.RageOrigin
+function S:GetCombatOrigin(mode)
+    mode = tostring(mode or "Auto")
+
     if mode == "Muzzle" then
         local muzzle = self:GetMuzzlePosition()
         if muzzle then return muzzle end
-    elseif mode == "Root" then
+    elseif mode == "Root" or mode == "Visible" then
         local root = self:GetRoot()
-        if root then return root.Position end
+        if mode == "Root" and root then
+            return root.Position
+        end
+        return self:GetVisibleOrigin()
+    elseif mode == "Server" then
+        local serverOrigin = self:GetObservedServerOrigin()
+        if serverOrigin then return serverOrigin end
+        return self:GetVisibleOrigin()
+    end
+
+    -- Auto: prefer another script's observed server CFrame, then our own server CFrame,
+    -- then visible/root. This is the coexistence path.
+    local observed = self:GetObservedServerOrigin()
+    if observed then return observed end
+    local muzzle = self:GetMuzzlePosition()
+    if muzzle and not self.Config.Enabled and not self.State.ExternalDetected then
+        return muzzle
     end
     return self:GetVisibleOrigin()
+end
+
+function S:GetRageOrigin()
+    return self:GetCombatOrigin(self.Config.RageOrigin)
+end
+
+function S:GetSilentOrigin()
+    return self:GetCombatOrigin(self.Config.SilentOrigin)
 end
 
 function S:PredictRagePart(part, origin)
@@ -1303,6 +1725,44 @@ function S:PredictRagePart(part, origin)
     leadTime = leadTime
         * math.max(tonumber(self.Config.PredictionMultiplier) or 1, 0)
         * math.max(tonumber(self.Config.RagePredictionScale) or 1, 0)
+    leadTime = math.min(leadTime, math.max(tonumber(self.Config.PredictionMaxLead) or 0.35, 0))
+
+    local velocity = self:GetTargetVelocity(part)
+    local offset = velocity * leadTime
+    local cap = math.max(tonumber(self.Config.MaxPredictionStuds) or 18, 0)
+    if cap > 0 and offset.Magnitude > cap then
+        offset = offset.Unit * cap
+    end
+
+    return base + offset
+end
+
+
+function S:PredictSilentPart(part, origin)
+    if not part or typeof(part) ~= "Instance" or not part:IsA("BasePart") then
+        return nil
+    end
+
+    local base = part.Position
+    if not self.Config.SilentPrediction then
+        return base
+    end
+
+    origin = origin or self:GetSilentOrigin()
+    local distance = (base - origin).Magnitude
+    local leadTime = 0
+
+    if self.Config.ProjectileAssist then
+        local speed = math.max(tonumber(self.Config.ProjectileSpeed) or 3000, 1)
+        leadTime = leadTime + (distance / speed)
+    end
+    if self.Config.PingAssist then
+        leadTime = leadTime + (self:GetPing() * math.max(tonumber(self.Config.PingFactor) or 1, 0))
+    end
+
+    leadTime = leadTime
+        * math.max(tonumber(self.Config.PredictionMultiplier) or 1, 0)
+        * math.max(tonumber(self.Config.SilentPredictionScale) or 1, 0)
     leadTime = math.min(leadTime, math.max(tonumber(self.Config.PredictionMaxLead) or 0.35, 0))
 
     local velocity = self:GetTargetVelocity(part)
@@ -1352,13 +1812,36 @@ function S:CanRageFire()
     if reloading then return false, "reloading" end
     if not melee and current ~= nil and current <= 0 then return false, "no ammo" end
 
+    local interval = math.max(tonumber(self.Config.RageShotInterval) or 0.05, 0.01)
+    if self.Config.RageUseWeaponCooldown then
+        interval = math.max(interval, self:GetWeaponCooldown())
+    end
+    if self.Config.RagePingGate then
+        interval = math.max(interval, math.min(self:GetPing() * 0.35, 0.12))
+    end
+
     local now = os.clock()
-    local interval = math.max(tonumber(self.Config.RageShotInterval) or 0.055, 0.01)
     if now - (self.State.RageLastShot or 0) < interval then
         return false, "cooldown"
     end
+    if now - (self.State.LastCombatShot or 0) < math.min(interval, 0.05) then
+        return false, "shared cooldown"
+    end
 
     return true, "ready"
+end
+
+function S:BuildShotData(hitPart, origin, targetPos)
+    if not hitPart or not origin or not targetPos then return nil end
+    local look = CFrame.new(origin, targetPos)
+    return {
+        [utf8.char(1)] = {
+            [utf8.char(0)] = self:EncodeRageCFrame(look),
+            [utf8.char(1)] = self:EncodeRageCFrame(look),
+            [utf8.char(2)] = hitPart,
+            [utf8.char(3)] = self:EncodeRageCFrame(CFrame.new(0.43, 0.25, 0.42)),
+        },
+    }
 end
 
 function S:FireRageShot()
@@ -1390,25 +1873,31 @@ function S:FireRageShot()
     local targetPos = self:PredictRagePart(hitPart, origin)
     if not origin or not targetPos then return false, "prediction" end
 
-    local startShooting = self:ToGameEnum("StartShooting")
+    local attackMode = tostring(self.Config.RageAttackMode or "Auto")
+    local itemName = tostring(self:ItemGet(item, "Name") or item.Name or "")
+    local actionName = "StartShooting"
+    if attackMode == "Knife" or (attackMode == "Auto" and string.find(string.lower(itemName), "knife", 1, true)) then
+        actionName = "StartAiming"
+    end
+
+    local startShooting = self:ToGameEnum(actionName)
     if startShooting == nil then
         self:RefreshCombatModules()
-        startShooting = self:ToGameEnum("StartShooting")
+        startShooting = self:ToGameEnum(actionName)
     end
     if startShooting == nil then return false, "enum" end
 
     local remote = self:GetUseItemRemote()
     if not remote then return false, "remote" end
 
-    local look = CFrame.new(origin, targetPos)
-    local data = {
-        [utf8.char(1)] = {
-            [utf8.char(0)] = self:EncodeRageCFrame(look),
-            [utf8.char(1)] = self:EncodeRageCFrame(look),
-            [utf8.char(2)] = hitPart,
-            [utf8.char(3)] = self:EncodeRageCFrame(CFrame.new(0.43, 0.25, 0.42)),
-        },
-    }
+    local data = self:BuildShotData(hitPart, origin, targetPos)
+    if not data then return false, "payload" end
+
+    if self.Config.RageInputAssist then
+        pcall(function()
+            self:SyncWeaponInput(actionName)
+        end)
+    end
 
     local attempts = math.clamp(math.floor(tonumber(self.Config.RageShootAttempts) or 1), 1, 3)
     local fired = false
@@ -1426,7 +1915,9 @@ function S:FireRageShot()
     end
 
     if fired then
-        self.State.RageLastShot = os.clock()
+        local now = os.clock()
+        self.State.RageLastShot = now
+        self.State.LastCombatShot = now
         self.State.RageLastFireError = nil
         return true, "firing"
     end
@@ -1435,25 +1926,25 @@ function S:FireRageShot()
     return false, "fire error"
 end
 
-function S:UpdateRage(dt)
+function S:UpdateRageTarget(dt)
     if not self.Config.RageEnabled then
         if self.State.RageTarget then
             self:ClearRageTarget()
         end
         self.State.RageLastStatus = "off"
-        return
+        return false
     end
 
     if self.Config.RageMatchOnly and not self:IsActiveMatch() then
         self:ClearRageTarget()
         self.State.RageLastStatus = "waiting match"
-        return
+        return false
     end
 
     if not self:IsAlive() then
         self:ClearRageTarget()
         self.State.RageLastStatus = "waiting fighter"
-        return
+        return false
     end
 
     local target = self.State.RageTarget
@@ -1481,7 +1972,7 @@ function S:UpdateRage(dt)
 
     if not target then
         self.State.RageLastStatus = "searching"
-        return
+        return false
     end
 
     local hum = target:FindFirstChildOfClass("Humanoid")
@@ -1490,18 +1981,539 @@ function S:UpdateRage(dt)
 
     if self.Config.RageVoidSync and self.Config.Enabled and self.State.Phase == "hide" then
         self.State.RageLastStatus = "void hide"
-        return
+        return true
     end
 
     if self.Config.RageForceWeapon then
         self:EquipRageWeapon()
     end
 
-    if self.Config.RageAutoShoot then
+    self.State.RageLastStatus = self.Config.RageAutoShoot and "ready" or "locked"
+    return true
+end
+
+-- Backwards-compatible API name used by v1.2 exports.
+function S:UpdateRage(dt)
+    return self:UpdateRageTarget(dt)
+end
+
+function S:UpdateSilentTarget(dt)
+    if not self.Config.SilentEnabled then
+        if self.State.SilentTarget then self:ClearSilentTarget() end
+        self.State.SilentLastStatus = "off"
+        return false
+    end
+
+    if not self:IsAlive() then
+        self:ClearSilentTarget()
+        self.State.SilentLastStatus = "waiting fighter"
+        return false
+    end
+
+    local target = self.State.SilentTarget
+    if self.Config.SilentUseRageTarget and self:IsValidRageTarget(self.State.RageTarget) then
+        target = self:AcquireSilentTarget(true)
+    elseif not self:IsValidSilentTarget(target) then
+        target = self:AcquireSilentTarget(false)
+    end
+
+    if not target then
+        self.State.SilentLastStatus = "searching"
+        return false
+    end
+
+    self.State.SilentLastTargetName = self.State.SilentTargetPlayer and self.State.SilentTargetPlayer.Name or target.Name
+    self.State.SilentLastStatus = "ready"
+    return true
+end
+
+function S:CanSilentFire()
+    if not self.Config.SilentEnabled then return false, "off" end
+
+    local uis = self.Services.UserInputService
+    local mouseDown = false
+    pcall(function()
+        mouseDown = uis:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+    end)
+
+    if not self.Config.SilentAutoShoot then
+        if self.Config.SilentOnlyWhenMouseDown and not mouseDown then
+            return false, "mouse"
+        elseif not self.Config.SilentOnlyWhenMouseDown and not mouseDown then
+            return false, "manual"
+        end
+    end
+
+    local chance = math.clamp(math.floor(tonumber(self.Config.SilentHitChance) or 100), 0, 100)
+    if chance <= 0 then return false, "chance" end
+    if chance < 100 and math.random(1, 100) > chance then
+        return false, "miss roll"
+    end
+
+    local item = self:GetEquippedItem()
+    if not item then return false, "no weapon" end
+
+    local current, _, melee, reloading = self:GetRageAmmo()
+    if reloading then return false, "reloading" end
+    if not melee and current ~= nil and current <= 0 then return false, "no ammo" end
+
+    local interval = math.max(tonumber(self.Config.SilentShotInterval) or 0.05, 0.01)
+    local now = os.clock()
+    if now - (self.State.SilentLastShot or 0) < interval then return false, "cooldown" end
+    if now - (self.State.LastCombatShot or 0) < math.min(interval, 0.05) then
+        return false, "shared cooldown"
+    end
+    return true, "ready"
+end
+
+function S:FireSilentShot()
+    local target = self.State.SilentTarget
+    if not self:IsValidSilentTarget(target) then
+        target = self:AcquireSilentTarget(true)
+    end
+    if not target then return false, "no target" end
+
+    local targetPlayer = self.State.SilentTargetPlayer
+    if self.Config.SilentRespectImmune and self:IsTargetImmune(targetPlayer, target) then
+        return false, "immune"
+    end
+
+    local canFire, reason = self:CanSilentFire()
+    if not canFire then return false, reason end
+
+    local item = self:GetEquippedItem()
+    local objectId = item and self:ItemGet(item, "ObjectID")
+    if objectId == nil then return false, "object id" end
+
+    local part = self:GetSilentHitPart(target)
+    if not part then return false, "hit part" end
+
+    local origin = self:GetSilentOrigin()
+    local targetPos = self:PredictSilentPart(part, origin)
+    if not origin or not targetPos then return false, "prediction" end
+
+    local startShooting = self:ToGameEnum("StartShooting")
+    if startShooting == nil then
+        self:RefreshCombatModules()
+        startShooting = self:ToGameEnum("StartShooting")
+    end
+    if startShooting == nil then return false, "enum" end
+
+    local remote = self:GetUseItemRemote()
+    if not remote then return false, "remote" end
+
+    local data = self:BuildShotData(part, origin, targetPos)
+    if not data then return false, "payload" end
+
+    local ok, err = pcall(function()
+        remote:FireServer(objectId, startShooting, data, nil)
+    end)
+
+    if ok then
+        local now = os.clock()
+        self.State.SilentLastShot = now
+        self.State.LastCombatShot = now
+        self.State.SilentLastFireError = nil
+        self.State.SilentLastStatus = "firing"
+        return true, "firing"
+    end
+
+    self.State.SilentLastFireError = tostring(err)
+    self.State.SilentLastStatus = "fire error"
+    return false, "fire error"
+end
+
+function S:UpdateCombatFire(dt)
+    local rageReady = self:UpdateRageTarget(dt)
+    local silentReady = self:UpdateSilentTarget(dt)
+
+    -- Rage gets first shot priority. Silent Aim becomes a fallback/assist when both are enabled,
+    -- preventing duplicate remote spam while still helping when Rage has no valid shot.
+    if rageReady and self.Config.RageEnabled and self.Config.RageAutoShoot then
         local fired, status = self:FireRageShot()
         self.State.RageLastStatus = status or (fired and "firing" or "ready")
+        if fired then return true end
+        if status == "void hide"
+            or status == "reloading"
+            or status == "no ammo"
+            or status == "no weapon"
+            or status == "cooldown"
+            or status == "shared cooldown" then
+            return false
+        end
+    end
+
+    if silentReady and self.Config.SilentEnabled then
+        local fired, status = self:FireSilentShot()
+        self.State.SilentLastStatus = status or (fired and "firing" or "ready")
+        return fired
+    end
+
+    if self.Config.RageInputAssist then
+        local now = os.clock()
+        if now - (self.State.RageLastFinish or 0) > 0.20 then
+            self.State.RageLastFinish = now
+            pcall(function() self:SyncWeaponInput("FinishShooting") end)
+        end
+    end
+
+    return false
+end
+
+
+
+function S:UpdateCombatPhase()
+    if not self.Config.Enabled then
+        if self.State.Phase ~= "attack" then
+            self:SetPhase("attack")
+        end
+        return
+    end
+
+    local elapsed = os.clock() - (self.State.PhaseStarted or 0)
+    if elapsed >= (self.State.PhaseDuration or 0) then
+        if self.State.Phase == "hide" then
+            self:SetPhase("attack")
+        else
+            self:SetPhase("hide")
+        end
+    end
+end
+
+function S:GetCombatTargetPart()
+    if self.Config.RageEnabled and self:IsValidRageTarget(self.State.RageTarget) then
+        return self:GetRageHitPart(self.State.RageTarget)
+    end
+    if self.Config.SilentEnabled and self:IsValidSilentTarget(self.State.SilentTarget) then
+        return self:GetSilentHitPart(self.State.SilentTarget)
+    end
+    return nil
+end
+
+function S:BuildRageAttackCFrame(root, dt)
+    local visible = self.State.VisibleCF or (root and root.CFrame) or CFrame.new()
+    if not self.Config.RageEnabled then return visible end
+
+    local mode = tostring(self.Config.RageAttackPosition or "Current")
+    if mode == "Current" then return visible end
+
+    local target = self.State.RageTarget
+    if not self:IsValidRageTarget(target) then return visible end
+    local part = self:GetRageHitPart(target)
+    if not part then return visible end
+
+    local predicted = self:PredictRagePart(part, visible.Position) or part.Position
+    local base = CFrame.new(predicted) * (part.CFrame - part.Position)
+    local forward = tonumber(self.Config.RageAttackForward) or 2
+    local height = tonumber(self.Config.RageAttackHeight) or 0
+
+    if mode == "Under" then
+        return CFrame.new(predicted + Vector3.new(0, -math.abs(height ~= 0 and height or 3.5), 0))
+    elseif mode == "Orbit" then
+        self.State.RageOrbitAngle = (self.State.RageOrbitAngle or 0)
+            + math.max(tonumber(self.Config.RageOrbitSpeed) or 7, 0) * math.max(dt or 0, 0)
+        local radius = math.max(tonumber(self.Config.RageOrbitRadius) or 3, 0)
+        local offset = Vector3.new(
+            math.cos(self.State.RageOrbitAngle) * radius,
+            height,
+            math.sin(self.State.RageOrbitAngle) * radius
+        )
+        return CFrame.new(predicted + offset)
+    end
+
+    -- Target: mirror the stronger reference's target-relative server position.
+    return base * CFrame.new(0, height, forward)
+end
+
+
+function S:BuildSilentManipulationCFrame(root)
+    local visible = self.State.VisibleCF or (root and root.CFrame) or CFrame.new()
+    if not self.Config.SilentEnabled or not self.Config.SilentManipulation then
+        return visible
+    end
+
+    local target = self.State.SilentTarget
+    if not self:IsValidSilentTarget(target) then return visible end
+    local part = self:GetSilentHitPart(target)
+    if not part then return visible end
+
+    local predicted = self:PredictSilentPart(part, visible.Position) or part.Position
+    local base = CFrame.new(predicted) * (part.CFrame - part.Position)
+    local forward = tonumber(self.Config.SilentManipulationForward) or 5
+    local height = tonumber(self.Config.SilentManipulationHeight) or 5
+    return base * CFrame.new(0, height, forward)
+end
+
+function S:GetFloorBelow(position)
+    if not position then return nil end
+    local now = os.clock()
+    local cachedPos = self.State.FloorCachePos
+    local cached = self.State.FloorCacheCF
+    if cached and cachedPos and (cachedPos - position).Magnitude < 3
+        and now - (self.State.FloorCacheAt or 0) < 0.20 then
+        return cached
+    end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local char = self:GetCharacter()
+    params.FilterDescendantsInstances = char and { char } or {}
+
+    local result = self.Services.Workspace:Raycast(position, Vector3.new(0, -500, 0), params)
+    local cf = nil
+    if result then
+        local depth = math.max(tonumber(self.Config.AntiAimUndergroundDepth) or 2, 0)
+        cf = CFrame.new(Vector3.new(position.X, result.Position.Y - depth, position.Z))
+    end
+
+    self.State.FloorCachePos = position
+    self.State.FloorCacheCF = cf
+    self.State.FloorCacheAt = now
+    return cf
+end
+
+function S:AntiAimCombatActive()
+    if not self.Config.AntiAimEnabled then return false end
+    if self.Config.AntiAimOnlyCombat then
+        local rage = self.Config.RageEnabled and self.State.RageTarget ~= nil
+        local silent = self.Config.SilentEnabled and self.State.SilentTarget ~= nil
+        if not rage and not silent then return false end
+    end
+    if self.Config.AntiAimOnlyAttack and self.Config.Enabled and self.State.Phase == "hide" then
+        return false
+    end
+    return true
+end
+
+function S:GetAntiAimRotation(dt)
+    if not self:AntiAimCombatActive() then return nil end
+
+    local now = os.clock()
+    local yawMode = tostring(self.Config.AntiAimYaw or "None")
+    local yawAmount = math.clamp(tonumber(self.Config.AntiAimYawAngle) or 180, -360, 360)
+    local jitterAmount = math.clamp(tonumber(self.Config.AntiAimJitterAngle) or 180, 0, 360)
+    local speed = math.max(tonumber(self.Config.AntiAimSpeed) or 36, 0.1)
+    local yaw = 0
+
+    if yawMode == "Backwards" then
+        yaw = math.pi
+    elseif yawMode == "Offset" or yawMode == "Custom" then
+        yaw = math.rad(yawAmount)
+    elseif yawMode == "Spin" then
+        self.State.AntiAimSpinAngle = ((self.State.AntiAimSpinAngle or 0) + speed * 18 * math.max(dt or 0, 0)) % 360
+        yaw = math.rad(self.State.AntiAimSpinAngle)
+    elseif yawMode == "Random" then
+        if now >= (self.State.AntiAimNextRandom or 0) then
+            self.State.AntiAimNextRandom = now + (1 / math.max(speed, 1))
+            self.State.AntiAimRandomYaw = math.random(-18000, 18000) / 100
+        end
+        yaw = math.rad(self.State.AntiAimRandomYaw or 0)
+    elseif yawMode == "Jitter" then
+        if now >= (self.State.AntiAimNextJitter or 0) then
+            self.State.AntiAimNextJitter = now + (1 / math.max(speed, 1))
+            self.State.AntiAimJitterAngle = math.random(-math.floor(jitterAmount * 100), math.floor(jitterAmount * 100)) / 100
+        end
+        yaw = math.rad(self.State.AntiAimJitterAngle or 0)
+    end
+
+    local pitchMode = tostring(self.Config.AntiAimPitch or "None")
+    local pitchAmount = math.clamp(tonumber(self.Config.AntiAimPitchAngle) or 89, 0, 89)
+    local pitch = 0
+    if pitchMode == "Up" or pitchMode == "Look Up" then
+        pitch = math.rad(-pitchAmount)
+    elseif pitchMode == "Down" or pitchMode == "Look Down" then
+        pitch = math.rad(pitchAmount)
+    elseif pitchMode == "Custom" or pitchMode == "Offset" then
+        pitch = math.rad(math.clamp(tonumber(self.Config.AntiAimPitchAngle) or 0, -89, 89))
+    elseif pitchMode == "Random" then
+        if now >= (self.State.AntiAimNextPitch or 0) then
+            self.State.AntiAimNextPitch = now + (1 / math.max(speed, 1))
+            self.State.AntiAimRandomPitch = math.random(-pitchAmount * 100, pitchAmount * 100) / 100
+        end
+        pitch = math.rad(self.State.AntiAimRandomPitch or 0)
+    elseif pitchMode == "Jitter" then
+        if now >= (self.State.AntiAimNextPitch or 0) then
+            self.State.AntiAimNextPitch = now + (1 / math.max(speed, 1))
+            self.State.AntiAimRandomPitch = -(self.State.AntiAimRandomPitch == pitchAmount and pitchAmount or -pitchAmount)
+        end
+        pitch = math.rad(tonumber(self.State.AntiAimRandomPitch) or pitchAmount)
+    end
+
+    local rollMode = tostring(self.Config.AntiAimRoll or "None")
+    local rollAmount = math.clamp(tonumber(self.Config.AntiAimRollAngle) or 0, -180, 180)
+    local roll = 0
+    if rollMode == "Tilt" or rollMode == "Custom" then
+        roll = math.rad(rollAmount)
+    elseif rollMode == "Sway" then
+        roll = math.rad(math.sin(now * math.max(speed / 6, 0.1)) * rollAmount)
+    elseif rollMode == "Spin" then
+        roll = math.rad(((now * speed * 10) % 360) - 180)
+    end
+
+    return CFrame.Angles(pitch, yaw, roll)
+end
+
+function S:ApplyServerRotations(cf, dt)
+    if not cf then return cf end
+
+    local anti = self:GetAntiAimRotation(dt)
+    if anti then
+        cf = cf * anti
+    end
+
+    local spin = self:GetSpinRotation(dt, false)
+    if spin then
+        cf = cf * spin
+    end
+    return cf
+end
+
+function S:ComputeServerCFrame(root, dt)
+    local visible = self.State.VisibleCF or (root and root.CFrame) or CFrame.new()
+    local serverCF = visible
+
+    if self.Config.RageEnabled and self.State.Phase ~= "hide" then
+        serverCF = self:BuildRageAttackCFrame(root, dt)
+    elseif self.Config.SilentEnabled and self.Config.SilentManipulation and self.State.Phase ~= "hide" then
+        serverCF = self:BuildSilentManipulationCFrame(root)
+    end
+
+    if self.Config.Enabled and self.State.Phase == "hide" then
+        -- Hide uses the stable reference pattern: random X/Z and a very deep Y while preserving rotation.
+        local hideBase = serverCF
+        local mode = tostring(self.Config.VoidMode or "Deep")
+        if mode == "Extreme" then
+            serverCF = self:BuildVoidCFrame(root)
+        else
+            local p = hideBase.Position
+            local depth = math.max(tonumber(self.Config.VoidDepth) or 250000, 500)
+            local range = math.max(tonumber(self.Config.VoidRange) or 9000, 100)
+            local x, z = p.X, p.Z
+            if mode == "Random" then
+                x = math.random(-math.floor(range), math.floor(range))
+                z = math.random(-math.floor(range), math.floor(range))
+            end
+            local y = mode == "Sky" and depth or -depth
+            serverCF = CFrame.new(Vector3.new(x, y, z)) * (hideBase - hideBase.Position)
+        end
+    elseif self.Config.AntiAimEnabled and self.Config.AntiAimUnderground then
+        local floor = self:GetFloorBelow(serverCF.Position)
+        if floor then
+            serverCF = floor * (serverCF - serverCF.Position)
+        end
+    end
+
+    serverCF = self:ApplyServerRotations(serverCF, dt)
+    return serverCF
+end
+
+function S:RestoreOwnedLocal(force)
+    if not self.State.OwnRootFrame and not force then return end
+    local root = self:GetRoot()
+    if not root or not root.Parent then
+        self.State.OwnRootFrame = false
+        self.State.OwnsRoot = false
+        return
+    end
+
+    local cf = self.State.LocalRestoreCF or self.State.VisibleCF
+    pcall(function()
+        if cf then root.CFrame = cf end
+        if self.State.LocalRestoreLV then root.AssemblyLinearVelocity = self.State.LocalRestoreLV end
+        if self.State.LocalRestoreAV then root.AssemblyAngularVelocity = self.State.LocalRestoreAV end
+    end)
+
+    self.State.OwnRootFrame = false
+    if force then
+        self.State.OwnsRoot = false
+        self.State.LastOwnServerCF = nil
+    end
+end
+
+
+function S:PreRenderExternalProbe()
+    if not self.Running then return end
+    if tostring(self.Config.CoexistenceMode or "Enhance") ~= "Enhance" then return end
+
+    local root = self:GetRoot()
+    if not root or not root.Parent then return end
+
+    local visible = self.State.VisibleCF or self.State.LocalRestoreCF
+    if not visible then return end
+
+    local observed = root.CFrame
+    local ownCF = self.State.LastOwnServerCF
+    local threshold = math.max(tonumber(self.Config.ExternalDesyncThreshold) or 80, 10)
+    local displacement = (observed.Position - visible.Position).Magnitude
+    local looksLikeOurWrite = ownCF and (observed.Position - ownCF.Position).Magnitude < 6
+
+    if displacement >= threshold and not looksLikeOurWrite then
+        self:MarkExternalOwner(observed, "late server cf")
+        self.State.ServerCF = observed
+    end
+end
+
+function S:PostSimulationStep(dt)
+    if not self.Running or not self:IsAlive() then
+        self:RestoreOwnedLocal(true)
+        return
+    end
+
+    self:UpdateCombatPhase()
+
+    local root = self:GetRoot()
+    if not root or not root.Parent then return end
+
+    local observedCF = root.CFrame
+    self.State.LastObservedCF = observedCF
+    self.State.LastPostSimulation = os.clock()
+
+    local external = self:DetectExternalServerState(root)
+    if external then
+        self.State.ServerCF = observedCF
+        self.State.OwnsRoot = false
+        self.State.OwnRootFrame = false
+        self.State.LastStatus = "coexist: " .. tostring(self.State.ExternalReason or "external")
+        return
+    end
+
+    -- Capture the real/local state only when another script has not already desynced it.
+    self:SampleVisibleRoot(root, dt)
+    self.State.LocalRestoreCF = root.CFrame
+    self.State.LocalRestoreLV = root.AssemblyLinearVelocity
+    self.State.LocalRestoreAV = root.AssemblyAngularVelocity
+
+    if not self:ShouldOwnRoot() then
+        self.State.ServerCF = root.CFrame
+        self.State.OwnsRoot = false
+        self.State.OwnRootFrame = false
+        return
+    end
+
+    local serverCF = self:ComputeServerCFrame(root, dt)
+    self.State.ServerCF = serverCF
+    self.State.LastOwnServerCF = serverCF
+    self.State.OwnsRoot = true
+    self.State.OwnRootFrame = true
+
+    pcall(function()
+        root.CFrame = serverCF
+        if self.Config.Enabled and self.State.Phase == "hide" and self.Config.VelocityNoise then
+            local n = math.floor(math.max(tonumber(self.Config.VelocityNoiseAmount) or 2500, 0))
+            root.AssemblyLinearVelocity = Vector3.new(
+                math.random(-n, n),
+                math.random(-n, n),
+                math.random(-n, n)
+            )
+        end
+    end)
+
+    if self.Config.Enabled then
+        self.State.LastStatus = self.State.Phase == "hide" and "void: hide" or "void: attack"
+    elseif self.Config.AntiAimEnabled or self.Config.SpinEnabled then
+        self.State.LastStatus = "anti aim"
     else
-        self.State.RageLastStatus = "locked"
+        self.State.LastStatus = "ready"
     end
 end
 
@@ -1772,7 +2784,7 @@ function S:BuildGui()
         ZIndex = 5,
     })
 
-    local title = self:MakeText(header, "devkage // void suite", 14, 7)
+    local title = self:MakeText(header, "devkage // hvh companion", 14, 7)
     title.Position = UDim2.fromOffset(8, 0)
     title.Size = UDim2.new(1, -110, 1, 0)
 
@@ -1811,7 +2823,7 @@ function S:BuildGui()
     self.Controls = {}
     self.ControlRefreshers = {}
 
-    local names = { "rage", "void", "spin", "misc" }
+    local names = { "rage", "silent", "void", "anti", "misc" }
     for i, name in ipairs(names) do
         local button = self:Create("TextButton", {
             Parent = tabBar,
@@ -1872,8 +2884,9 @@ function S:BuildGui()
 
     self:MakeDraggable(header, main)
     self:BuildRageTab(self.Tabs.rage.page)
+    self:BuildSilentTab(self.Tabs.silent.page)
     self:BuildVoidTab(self.Tabs.void.page)
-    self:BuildSpinTab(self.Tabs.spin.page)
+    self:BuildAntiTab(self.Tabs.anti.page)
     self:BuildMiscTab(self.Tabs.misc.page)
     self:SelectTab("rage")
     self:RefreshAllControls()
@@ -2185,8 +3198,8 @@ function S:BuildRageTab(page)
     self:AddToggle(page, "RageAutoShoot", "auto shoot")
     self:AddCycle(page, "RageTargetMode", "target mode", { "Cursor", "Distance", "Lowest HP", "Random" })
     self:AddCycle(page, "RageHitPart", "hit part", { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "Closest", "Random" })
-    self:AddSlider(page, "RageFOV", "cursor target radius", 0, 1500, 25, "px")
-    self:AddSlider(page, "RageMaxDistance", "max target distance", 0, 5000, 50, "st")
+    self:AddSlider(page, "RageFOV", "cursor target radius", 0, 1800, 25, "px")
+    self:AddSlider(page, "RageMaxDistance", "max target distance", 0, 6000, 50, "st")
     self:AddToggle(page, "RageRequireOnScreen", "require on screen")
     self:AddToggle(page, "RageStickyTarget", "sticky target")
     self:AddSlider(page, "RageReacquireDelay", "reacquire delay", 0.01, 0.50, 0.01, "s")
@@ -2198,10 +3211,21 @@ function S:BuildRageTab(page)
     self:AddCycle(page, "RageWeaponPick", "weapon", { "Primary", "Secondary", "Melee", "Current" }, function()
         self.State.RageLastEquip = 0
     end)
+    self:AddCycle(page, "RageAttackMode", "attack mode", { "Auto", "Gun", "Melee", "Knife" })
     self:AddToggle(page, "RageForceWeapon", "force selected weapon")
     self:AddSlider(page, "RageShootAttempts", "shoot attempts", 1, 3, 1, "x")
-    self:AddSlider(page, "RageShotInterval", "shot interval", 0.01, 0.30, 0.01, "s")
-    self:AddCycle(page, "RageOrigin", "shot origin", { "Visible", "Root", "Muzzle" })
+    self:AddSlider(page, "RageShotInterval", "minimum shot interval", 0.01, 0.30, 0.01, "s")
+    self:AddToggle(page, "RageUseWeaponCooldown", "respect weapon cooldown")
+    self:AddToggle(page, "RagePingGate", "ping-aware fire gate")
+    self:AddToggle(page, "RageInputAssist", "mechanics input assist")
+    self:AddCycle(page, "RageOrigin", "shot origin", { "Auto", "Server", "Visible", "Root", "Muzzle" })
+
+    self:AddSection(page, "server attack position")
+    self:AddCycle(page, "RageAttackPosition", "attack position", { "Current", "Target", "Under", "Orbit" })
+    self:AddSlider(page, "RageAttackForward", "target forward offset", -8, 8, 0.25, "st")
+    self:AddSlider(page, "RageAttackHeight", "target height offset", -12, 12, 0.25, "st")
+    self:AddSlider(page, "RageOrbitRadius", "orbit radius", 0, 12, 0.25, "st")
+    self:AddSlider(page, "RageOrbitSpeed", "orbit speed", 0, 30, 0.5, "")
 
     self:AddSection(page, "prediction / void")
     self:AddToggle(page, "RagePrediction", "rage prediction")
@@ -2217,6 +3241,48 @@ function S:BuildRageTab(page)
     self:AddButton(page, "clear target", function()
         self:ClearRageTarget()
         self.State.RageLastStatus = "cleared"
+    end)
+end
+
+function S:BuildSilentTab(page)
+    self:AddSection(page, "silent aim")
+    self:AddToggle(page, "SilentEnabled", "silent aim", function(on)
+        if on then
+            self:RefreshCombatModules()
+            self:AcquireSilentTarget(true)
+        else
+            self:ClearSilentTarget()
+        end
+    end)
+    self:AddCycle(page, "SilentKey", "toggle key", { "T", "G", "H", "J", "K", "None" })
+    self:AddToggle(page, "SilentAutoShoot", "auto shoot")
+    self:AddToggle(page, "SilentOnlyWhenMouseDown", "mouse fire when auto off")
+    self:AddToggle(page, "SilentUseRageTarget", "share rage target")
+    self:AddCycle(page, "SilentTargetMode", "target mode", { "Cursor", "Distance", "Lowest HP", "Random" })
+    self:AddCycle(page, "SilentHitPart", "hit part", { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "Closest", "Random" })
+    self:AddSlider(page, "SilentHitChance", "hit chance", 0, 100, 1, "%")
+    self:AddSlider(page, "SilentFOV", "silent fov", 0, 1800, 25, "px")
+    self:AddSlider(page, "SilentMaxDistance", "max distance", 0, 6000, 50, "st")
+    self:AddToggle(page, "SilentRequireOnScreen", "require on screen")
+    self:AddToggle(page, "SilentTeamCheck", "team check")
+    self:AddToggle(page, "SilentRespectImmune", "respect immunity")
+
+    self:AddSection(page, "silent prediction")
+    self:AddToggle(page, "SilentPrediction", "prediction")
+    self:AddSlider(page, "SilentPredictionScale", "prediction scale", 0, 2.5, 0.05, "x")
+    self:AddSlider(page, "SilentShotInterval", "shot interval", 0.01, 0.30, 0.01, "s")
+    self:AddCycle(page, "SilentOrigin", "shot origin", { "Auto", "Server", "Visible", "Root", "Muzzle" })
+
+    self:AddSection(page, "silent manipulation")
+    self:AddToggle(page, "SilentManipulation", "server-origin manipulation")
+    self:AddSlider(page, "SilentManipulationForward", "forward offset", -12, 12, 0.25, "st")
+    self:AddSlider(page, "SilentManipulationHeight", "height offset", -12, 12, 0.25, "st")
+
+    self:AddSection(page, "silent status")
+    local _, silentLabel = self:AddInfoRow(page, "silent: -")
+    self.SilentTargetLabel = silentLabel
+    self:AddButton(page, "retarget silent", function()
+        self:AcquireSilentTarget(true)
     end)
 end
 
@@ -2257,43 +3323,211 @@ function S:BuildVoidTab(page)
     self:AddToggle(page, "RespawnProof", "respawn proof")
 end
 
-function S:BuildSpinTab(page)
-    self:AddSection(page, "spinbot")
-    self:AddToggle(page, "SpinEnabled", "spinbot", function(on)
-        if not on then self:RestoreAutoRotate() end
-    end)
-    self:AddCycle(page, "SpinKey", "toggle key", { "B", "N", "M", "H", "J", "K", "None" })
-    self:AddCycle(page, "SpinMode", "yaw mode", { "Spin", "Jitter", "Random", "Sway" })
+function S:BuildAntiTab(page)
+    self:AddSection(page, "network anti aim")
+    self:AddToggle(page, "AntiAimEnabled", "anti aim")
+    self:AddCycle(page, "AntiAimKey", "toggle key", { "Y", "U", "I", "O", "P", "None" })
+    self:AddCycle(page, "AntiAimYaw", "yaw", { "None", "Backwards", "Offset", "Spin", "Jitter", "Random" })
+    self:AddSlider(page, "AntiAimYawAngle", "yaw angle", -180, 180, 1, "°")
+    self:AddSlider(page, "AntiAimJitterAngle", "jitter range", 0, 180, 1, "°")
+    self:AddSlider(page, "AntiAimSpeed", "anti aim speed", 1, 100, 1, "")
+    self:AddCycle(page, "AntiAimPitch", "pitch", { "None", "Up", "Down", "Custom", "Jitter", "Random" })
+    self:AddSlider(page, "AntiAimPitchAngle", "pitch angle", -89, 89, 1, "°")
+    self:AddCycle(page, "AntiAimRoll", "roll", { "None", "Tilt", "Sway", "Spin" })
+    self:AddSlider(page, "AntiAimRollAngle", "roll angle", -180, 180, 1, "°")
+    self:AddToggle(page, "AntiAimOnlyCombat", "only with combat target")
+    self:AddToggle(page, "AntiAimOnlyAttack", "disable during void hide")
+    self:AddToggle(page, "AntiAimUnderground", "underground server position")
+    self:AddSlider(page, "AntiAimUndergroundDepth", "underground depth", 0, 8, 0.25, "st")
+
+    self:AddSection(page, "spinbot layer")
+    self:AddToggle(page, "SpinEnabled", "spinbot")
+    self:AddCycle(page, "SpinKey", "spin toggle key", { "B", "N", "M", "H", "J", "K", "None" })
+    self:AddCycle(page, "SpinMode", "spin yaw mode", { "Spin", "Jitter", "Random", "Sway" })
     self:AddCycle(page, "SpinDirection", "direction", { "Right", "Left" })
     self:AddSlider(page, "SpinSpeed", "spin speed", 0, 3600, 10, "°/s")
     self:AddSlider(page, "SpinRange", "yaw range", 0, 360, 1, "°")
     self:AddSlider(page, "JitterInterval", "jitter interval", 0.01, 0.5, 0.01, "s")
     self:AddSlider(page, "RandomInterval", "random interval", 0.01, 0.5, 0.01, "s")
 
-    self:AddSection(page, "pitch / roll")
+    self:AddSection(page, "spin pitch / roll")
     self:AddCycle(page, "PitchMode", "pitch mode", { "None", "Up", "Down", "Sine", "Jitter" })
     self:AddSlider(page, "PitchAmount", "pitch amount", 0, 89, 1, "°")
     self:AddCycle(page, "RollMode", "roll mode", { "None", "Tilt", "Spin", "Sway" })
     self:AddSlider(page, "RollAmount", "roll amount", 0, 180, 1, "°")
-
-    self:AddSection(page, "behavior")
     self:AddToggle(page, "SpinOnlyWhileVoid", "spin only while hidden")
-    self:AddToggle(page, "CameraSafe", "keep camera steady")
-    self:AddToggle(page, "DisableAutoRotate", "disable humanoid autorotate")
+    self:AddToggle(page, "CameraSafe", "keep local camera steady")
+end
+
+
+function S:ApplyPreset(name)
+    name = tostring(name or "Deadly Extreme")
+    local c = self.Config
+
+    if name == "Deadly Extreme" then
+        -- Aggressive combat values, but coexistence stays in Enhance mode so another
+        -- HvH script can keep its own root/server-CFrame writer without being overwritten.
+        c.CoexistenceMode = "Enhance"
+        c.CoexistenceBootDelay = 1.25
+        c.ExternalBackoff = 0.45
+        c.ExternalDesyncThreshold = 65
+        c.UseExternalServerOrigin = true
+        c.RespectOtherMovement = true
+
+        c.Enabled = true
+        c.AttackTime = 0.10
+        c.HideTime = 0.24
+        c.RandomTiming = true
+        c.TimingVariance = 0.10
+        c.VoidMode = "Random"
+        c.VoidDepth = 999999999
+        c.VoidRange = 10000
+        c.VelocityNoise = false
+
+        c.VoidPrediction = true
+        c.PredictionMultiplier = 1.22
+        c.PredictionSmoothing = 0.58
+        c.PredictionMaxLead = 0.40
+        c.PingAssist = true
+        c.PingFactor = 1.05
+        c.ProjectileAssist = true
+        c.ProjectileSpeed = 3000
+        c.MaxPredictionStuds = 28
+
+        c.RageEnabled = true
+        c.RageAutoTarget = true
+        c.RageAutoShoot = true
+        c.RageTargetMode = "Distance"
+        c.RageFOV = 1800
+        c.RageMaxDistance = 6000
+        c.RageRequireOnScreen = false
+        c.RageStickyTarget = true
+        c.RageReacquireDelay = 0.03
+        c.RageTeamCheck = true
+        c.RageRespectImmune = true
+        c.RageMatchOnly = false
+        c.RageHitPart = "Head"
+        c.RageWeaponPick = "Primary"
+        c.RageAttackMode = "Auto"
+        c.RageForceWeapon = false
+        c.RageShootAttempts = 2
+        c.RageShotInterval = 0.02
+        c.RageUseWeaponCooldown = true
+        c.RagePingGate = true
+        c.RageInputAssist = true
+        c.RagePrediction = true
+        c.RagePredictionScale = 1.15
+        c.RageVoidSync = true
+        c.RageOrigin = "Auto"
+        c.RageAttackPosition = "Target"
+        c.RageAttackForward = 2
+        c.RageAttackHeight = 0
+        c.RageOrbitRadius = 0
+        c.RageOrbitSpeed = 8
+
+        c.SilentEnabled = true
+        c.SilentAutoShoot = true
+        c.SilentUseRageTarget = true
+        c.SilentTargetMode = "Cursor"
+        c.SilentFOV = 1800
+        c.SilentMaxDistance = 6000
+        c.SilentRequireOnScreen = false
+        c.SilentTeamCheck = true
+        c.SilentRespectImmune = true
+        c.SilentHitChance = 100
+        c.SilentHitPart = "Head"
+        c.SilentPrediction = true
+        c.SilentPredictionScale = 1.05
+        c.SilentShotInterval = 0.03
+        c.SilentOrigin = "Auto"
+        c.SilentOnlyWhenMouseDown = false
+        c.SilentManipulation = true
+        c.SilentManipulationForward = 5
+        c.SilentManipulationHeight = 5
+
+        c.AntiAimEnabled = true
+        c.AntiAimYaw = "Jitter"
+        c.AntiAimYawAngle = 180
+        c.AntiAimJitterAngle = 180
+        c.AntiAimSpeed = 42
+        c.AntiAimPitch = "Random"
+        c.AntiAimPitchAngle = 89
+        c.AntiAimRoll = "Sway"
+        c.AntiAimRollAngle = 28
+        c.AntiAimOnlyCombat = true
+        c.AntiAimOnlyAttack = false
+        c.AntiAimUnderground = false
+
+        -- One network anti-aim layer is enough; leaving legacy spin off avoids double rotations.
+        c.SpinEnabled = false
+        c.CameraSafe = true
+    elseif name == "Stable Coexist" then
+        c.CoexistenceMode = "Enhance"
+        c.CoexistenceBootDelay = 1.00
+        c.ExternalBackoff = 0.55
+        c.ExternalDesyncThreshold = 100
+        c.UseExternalServerOrigin = true
+        c.RespectOtherMovement = true
+        c.Enabled = true
+        c.AttackTime = 0.35
+        c.HideTime = 0.12
+        c.VoidMode = "Deep"
+        c.VoidDepth = 300000
+        c.VoidRange = 9000
+        c.RageEnabled = true
+        c.RageAutoTarget = true
+        c.RageAutoShoot = true
+        c.RageTargetMode = "Cursor"
+        c.RageRequireOnScreen = true
+        c.RageShootAttempts = 1
+        c.RageShotInterval = 0.05
+        c.RageAttackPosition = "Current"
+        c.SilentEnabled = true
+        c.SilentAutoShoot = false
+        c.SilentOnlyWhenMouseDown = true
+        c.AntiAimEnabled = true
+        c.AntiAimYaw = "Jitter"
+        c.AntiAimJitterAngle = 150
+        c.AntiAimSpeed = 24
+        c.AntiAimPitch = "Random"
+        c.AntiAimRoll = "None"
+        c.SpinEnabled = false
+    end
+
+    self:SetPhase("attack")
+    self:RefreshCombatModules()
+    self:AcquireRageTarget(true)
+    self:AcquireSilentTarget(true)
+    self:SaveConfig()
+    self:RefreshAllControls()
 end
 
 function S:BuildMiscTab(page)
     self:AddSection(page, "coexistence")
+    self:AddCycle(page, "CoexistenceMode", "root ownership", { "Enhance", "Standalone", "Passive" })
+    self:AddSlider(page, "CoexistenceBootDelay", "combat boot delay", 0, 3.0, 0.25, "s")
+    self:AddSlider(page, "ExternalBackoff", "external-script backoff", 0.05, 1.50, 0.05, "s")
+    self:AddSlider(page, "ExternalDesyncThreshold", "external desync threshold", 10, 500, 10, "st")
+    self:AddToggle(page, "UseExternalServerOrigin", "use other script server origin")
+    self:AddToggle(page, "RespectOtherMovement", "respect other movement scripts")
     self:AddToggle(page, "SyncWithDevKage", "mirror main devkage ui")
     self:AddCycle(page, "FallbackUiKey", "standalone ui key", { "RightAlt", "RightShift", "Insert", "Home" })
     self:AddToggle(page, "SaveSettings", "save settings")
     self:AddToggle(page, "ShowStatus", "show runtime status")
 
+    self:AddSection(page, "hvh presets")
+    self:AddButton(page, "apply DEADLY EXTREME (coexist)", function()
+        self:ApplyPreset("Deadly Extreme")
+    end, true)
+    self:AddButton(page, "apply stable coexist", function()
+        self:ApplyPreset("Stable Coexist")
+    end)
+
     self:AddSection(page, "runtime api")
     self:AddButton(page, "copy prediction api name", function()
         if setclipboard then pcall(setclipboard, "getgenv().DevKageVoidPredict(part, origin)") end
     end)
-    self:AddButton(page, "copy visible-origin api name", function()
+    self:AddButton(page, "copy server-origin api name", function()
         if setclipboard then pcall(setclipboard, "getgenv().DevKageVoidOrigin()") end
     end)
     self:AddButton(page, "force combat refresh", function()
@@ -2337,16 +3571,26 @@ function S:UpdateUi(dt)
             local ping = math.floor(self:GetPing() * 1000 + 0.5)
             local mask = (ENV.__DevKageMaskShard and "mask:on") or "mask:off"
             local phase = self.Config.Enabled and self.State.Phase or "off"
-            local spin = self.Config.SpinEnabled and self.Config.SpinMode or "off"
             local rage = self.Config.RageEnabled and (self.State.RageLastStatus or "on") or "off"
+            local silent = self.Config.SilentEnabled and (self.State.SilentLastStatus or "on") or "off"
+            local owner
+            if tostring(self.Config.CoexistenceMode) == "Passive" then
+                owner = "passive"
+            elseif self.State.ExternalDetected or self:IsExternalBackoffActive() then
+                owner = "external"
+            elseif self.State.OwnsRoot then
+                owner = "suite"
+            else
+                owner = "local"
+            end
             self.StatusLabel.Text = string.format(
-                "rage:%s | void:%s | spin:%s | %dms | %s | root:%s",
+                "rage:%s | silent:%s | void:%s | owner:%s | %dms | %s",
                 rage,
+                silent,
                 phase,
-                spin,
+                owner,
                 ping,
-                mask,
-                self.State.FighterSource or "?"
+                mask
             )
         end
     end
@@ -2363,6 +3607,14 @@ function S:UpdateUi(dt)
             hp,
             tostring(self.State.RageLastStatus or "idle"),
             immune and " | immune" or ""
+        )
+    end
+
+    if self.SilentTargetLabel then
+        self.SilentTargetLabel.Text = string.format(
+            "silent: %s | %s",
+            tostring(self.State.SilentLastTargetName or "-"),
+            tostring(self.State.SilentLastStatus or "idle")
         )
     end
 end
@@ -2388,9 +3640,35 @@ function S:HandleKey(input, processed)
         return
     end
 
+    if self.Config.SilentKey ~= "None" and name == self.Config.SilentKey then
+        self.Config.SilentEnabled = not self.Config.SilentEnabled
+        if self.Config.SilentEnabled then
+            self:RefreshCombatModules()
+            self:AcquireSilentTarget(true)
+        else
+            self:ClearSilentTarget()
+            self.State.SilentLastStatus = "off"
+        end
+        self:SaveConfig()
+        self:RefreshAllControls()
+        return
+    end
+
     if self.Config.VoidKey ~= "None" and name == self.Config.VoidKey then
         self.Config.Enabled = not self.Config.Enabled
-        if self.Config.Enabled then self:SetPhase("attack") else self:ResetVoidState(true) end
+        if self.Config.Enabled then
+            self:SetPhase("attack")
+        else
+            self:SetPhase("attack")
+            self:RestoreOwnedLocal(true)
+        end
+        self:SaveConfig()
+        self:RefreshAllControls()
+        return
+    end
+
+    if self.Config.AntiAimKey ~= "None" and name == self.Config.AntiAimKey then
+        self.Config.AntiAimEnabled = not self.Config.AntiAimEnabled
         self:SaveConfig()
         self:RefreshAllControls()
         return
@@ -2398,7 +3676,6 @@ function S:HandleKey(input, processed)
 
     if self.Config.SpinKey ~= "None" and name == self.Config.SpinKey then
         self.Config.SpinEnabled = not self.Config.SpinEnabled
-        if not self.Config.SpinEnabled then self:RestoreAutoRotate() end
         self:SaveConfig()
         self:RefreshAllControls()
         return
@@ -2410,15 +3687,25 @@ function S:HandleKey(input, processed)
 end
 
 function S:OnCharacterAdded()
+    self:RestoreOwnedLocal(true)
     self:ResetVoidState(false)
     self:RestoreAutoRotate()
     self:ClearRageTarget()
+    self:ClearSilentTarget()
+    self.State.ServerCF = nil
+    self.State.ExternalServerCF = nil
+    self.State.ExternalOwnerUntil = 0
+    self.State.ExternalDetected = false
     self.State.RageLastStatus = self.Config.RageEnabled and "respawn" or "off"
+    self.State.SilentLastStatus = self.Config.SilentEnabled and "respawn" or "off"
     task.delay(0.5, function()
         if not self.Running then return end
         self:RefreshCombatModules()
         if self.Config.RageEnabled and self.Config.RageAutoTarget then
             self:AcquireRageTarget(true)
+        end
+        if self.Config.SilentEnabled then
+            self:AcquireSilentTarget(true)
         end
     end)
 end
@@ -2431,9 +3718,9 @@ function S:RegisterMaskShard()
     end
     mask.Runtime.VoidSuite = self
     mask.Runtime.VoidPrediction = self.MaskPredictionExport
-    if self.RageExport then
-        mask.Runtime.RageBot = self.RageExport
-    end
+    if self.RageExport then mask.Runtime.RageBot = self.RageExport end
+    if self.SilentExport then mask.Runtime.SilentAim = self.SilentExport end
+    if self.AntiAimExport then mask.Runtime.AntiAim = self.AntiAimExport end
 end
 
 function S:UnregisterMaskShard()
@@ -2443,41 +3730,57 @@ function S:UnregisterMaskShard()
         if mask.Runtime.VoidPrediction == self.MaskPredictionExport then
             mask.Runtime.VoidPrediction = nil
         end
-        if mask.Runtime.RageBot == self.RageExport then
-            mask.Runtime.RageBot = nil
-        end
+        if mask.Runtime.RageBot == self.RageExport then mask.Runtime.RageBot = nil end
+        if mask.Runtime.SilentAim == self.SilentExport then mask.Runtime.SilentAim = nil end
+        if mask.Runtime.AntiAim == self.AntiAimExport then mask.Runtime.AntiAim = nil end
     end
     self.MaskPredictionExport = nil
 end
 
 function S:StartLoops()
+    -- Targeting/fire loop. It never replaces Gun/Melee/CameraController methods.
     self:Track(self.Services.RunService.Heartbeat:Connect(function(dt)
         if not self.Running then return end
         local ok, err = pcall(function()
-            self:UpdateVoid(dt or 0)
-            self:UpdateRage(dt or 0)
+            self:UpdateCombatFire(dt or 0)
+        end)
+        if not ok then
+            self.State.LastError = tostring(err)
+        end
+    end))
+
+    -- One server-CFrame writer for Void + Rage positioning + Anti-Aim.
+    -- This is intentionally PostSimulation so local rendering can be restored separately.
+    self:Track(self.Services.RunService.PostSimulation:Connect(function(dt)
+        if not self.Running then return end
+        local ok, err = pcall(function()
+            self:PostSimulationStep(dt or 0)
         end)
         if not ok then
             self.State.LastError = tostring(err)
             if self.Config.AutoRecover then
-                pcall(function() self:RestoreLocal(true) end)
+                pcall(function() self:RestoreOwnedLocal(true) end)
             end
         end
     end))
 
-    self:Bind("DK_VoidSuite_LocalRestore", Enum.RenderPriority.Camera.Value - 8, function(dt)
+    -- Probe before normal render-priority 0 restores. This catches another script
+    -- that wrote its server CFrame after our PostSimulation callback.
+    self:Bind("DK_HVHCompanion_ExternalProbe", Enum.RenderPriority.First.Value - 100, function()
         if not self.Running then return end
-        if self.State.Snap then
-            self:RestoreLocal(false)
+        self:PreRenderExternalProbe()
+    end)
+
+    -- Restore only frames that this companion itself wrote. If another script owns
+    -- server CFrame, this does nothing and leaves that script's restore loop alone.
+    self:Bind("DK_HVHCompanion_LocalRestore", Enum.RenderPriority.First.Value, function()
+        if not self.Running then return end
+        if self.State.OwnRootFrame then
+            self:RestoreOwnedLocal(false)
         end
     end)
 
-    self:Bind("DK_VoidSuite_Spin", Enum.RenderPriority.Camera.Value + 2, function(dt)
-        if not self.Running then return end
-        self:UpdateSpin(dt or 0)
-    end)
-
-    self:Bind("DK_VoidSuite_UI", Enum.RenderPriority.Last.Value + 4, function(dt)
+    self:Bind("DK_HVHCompanion_UI", Enum.RenderPriority.Last.Value + 4, function(dt)
         if not self.Running then return end
         self:UpdateUi(dt or 0)
     end)
@@ -2486,9 +3789,11 @@ end
 function S:Unload(reason)
     if not self.Running then return end
     self.Running = false
-    pcall(function() self:RestoreLocal(true) end)
+    pcall(function() self:RestoreOwnedLocal(true) end)
+    pcall(function() self:RestoreLocal(true) end) -- v1.2 cleanup compatibility
     pcall(function() self:RestoreAutoRotate() end)
     pcall(function() self:ClearRageTarget() end)
+    pcall(function() self:ClearSilentTarget() end)
     self:UnbindAll()
     self:DisconnectAll()
     self:UnregisterMaskShard()
@@ -2498,18 +3803,12 @@ function S:Unload(reason)
         self.Gui = nil
     end
 
-    if ENV.DevKageVoidSuite == self then
-        ENV.DevKageVoidSuite = nil
-    end
-    if ENV.DevKageVoidPredict == self.PredictionExport then
-        ENV.DevKageVoidPredict = nil
-    end
-    if ENV.DevKageVoidOrigin == self.OriginExport then
-        ENV.DevKageVoidOrigin = nil
-    end
-    if ENV.DevKageRageBot == self.RageExport then
-        ENV.DevKageRageBot = nil
-    end
+    if ENV.DevKageVoidSuite == self then ENV.DevKageVoidSuite = nil end
+    if ENV.DevKageVoidPredict == self.PredictionExport then ENV.DevKageVoidPredict = nil end
+    if ENV.DevKageVoidOrigin == self.OriginExport then ENV.DevKageVoidOrigin = nil end
+    if ENV.DevKageRageBot == self.RageExport then ENV.DevKageRageBot = nil end
+    if ENV.DevKageSilentAim == self.SilentExport then ENV.DevKageSilentAim = nil end
+    if ENV.DevKageAntiAim == self.AntiAimExport then ENV.DevKageAntiAim = nil end
 end
 
 function S:BootStep(name, callback)
@@ -2556,7 +3855,7 @@ function S:Init()
             return self:PredictPart(part, origin)
         end
         self.OriginExport = function()
-            return self:GetVisibleOrigin()
+            return self:GetCombatOrigin("Auto")
         end
         self.RageExport = {
             Acquire = function(force) return self:AcquireRageTarget(force == true) end,
@@ -2565,11 +3864,31 @@ function S:Init()
             GetTarget = function() return self.State.RageTarget end,
             Predict = function(part, origin) return self:PredictRagePart(part, origin or self:GetRageOrigin()) end,
             GetStatus = function() return self.State.RageLastStatus end,
+            GetServerOrigin = function() return self:GetCombatOrigin("Auto") end,
+            ApplyDeadlyPreset = function() return self:ApplyPreset("Deadly Extreme") end,
             Suite = self,
         }
+        self.SilentExport = {
+            Acquire = function(force) return self:AcquireSilentTarget(force == true) end,
+            Clear = function() return self:ClearSilentTarget() end,
+            Fire = function() return self:FireSilentShot() end,
+            GetTarget = function() return self.State.SilentTarget end,
+            Predict = function(part, origin) return self:PredictSilentPart(part, origin or self:GetSilentOrigin()) end,
+            GetStatus = function() return self.State.SilentLastStatus end,
+            Suite = self,
+        }
+        self.AntiAimExport = {
+            GetRotation = function(dt) return self:GetAntiAimRotation(dt or 0) end,
+            GetServerCF = function() return self.State.ServerCF end,
+            IsExternalOwner = function() return self.State.ExternalDetected or self:IsExternalBackoffActive() end,
+            Suite = self,
+        }
+
         ENV.DevKageVoidPredict = self.PredictionExport
         ENV.DevKageVoidOrigin = self.OriginExport
         ENV.DevKageRageBot = self.RageExport
+        ENV.DevKageSilentAim = self.SilentExport
+        ENV.DevKageAntiAim = self.AntiAimExport
 
         -- MaskShard may have appeared after the first registration pass.
         self:RegisterMaskShard()
@@ -2594,6 +3913,10 @@ function S:Init()
     end)
 
     self:BootStep("loops", function()
+        local delay = math.max(tonumber(self.Config.CoexistenceBootDelay) or 0, 0)
+        if delay > 0 then
+            task.wait(delay)
+        end
         self:StartLoops()
     end)
 
