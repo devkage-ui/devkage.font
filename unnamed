@@ -1,5 +1,5 @@
 --[[
-    DevKage Void Suite Companion v1.4
+    DevKage Void Suite Companion v1.5 UE Diagnostics
     Standalone / coexistence-first companion for DevKage + MaskShard.
 
     Goals:
@@ -39,7 +39,7 @@ end
 
 local S = {
     Name = "DevKage Void Suite",
-    Version = "1.4.0",
+    Version = "1.5.0-ue-diagnostics",
     Running = true,
     Ready = false,
     Connections = {},
@@ -200,6 +200,15 @@ S.Defaults = {
     CameraSafe = true,
     DisableAutoRotate = true,
 
+    -- UE diagnostics / compatibility
+    DiagnosticsEnabled = true,
+    DiagnosticsVerbose = true,
+    DiagnosticsAutoRefreshModules = true,
+    DiagnosticsModuleRefreshInterval = 2.0,
+    DiagnosticsLogMax = 96,
+    DiagnosticsSaveOnError = false,
+    DiagnosticsShowLoopAges = true,
+
     -- UI / persistence
     SyncWithDevKage = true,
     FallbackUiKey = "RightAlt",
@@ -287,6 +296,42 @@ S.State = {
     SavedAutoRotate = nil,
     AutoRotateHumanoid = nil,
 
+    -- UE diagnostic state
+    Diagnostics = {
+        StartedAt = os.clock(),
+        HeartbeatTicks = 0,
+        PostSimulationTicks = 0,
+        ExternalProbeTicks = 0,
+        RestoreTicks = 0,
+        UiTicks = 0,
+        RageFireAttempts = 0,
+        RageFireSuccess = 0,
+        RageFireFail = 0,
+        SilentFireAttempts = 0,
+        SilentFireSuccess = 0,
+        SilentFireFail = 0,
+        RootWrites = 0,
+        ExternalClaims = 0,
+        ModuleRefreshes = 0,
+        LastHeartbeatAt = 0,
+        LastPostSimulationAt = 0,
+        LastProbeAt = 0,
+        LastRestoreAt = 0,
+        LastUiAt = 0,
+        LastHeartbeatDt = 0,
+        LastPostSimulationDt = 0,
+        LastRootDisplacement = 0,
+        MaxRootDisplacement = 0,
+        LastModuleRefreshAt = 0,
+        LastRemoteCallAt = 0,
+        LastRemoteError = nil,
+        LastRageResult = nil,
+        LastSilentResult = nil,
+        LastEvent = nil,
+        BootStages = {},
+        Log = {},
+    },
+
     -- runtime / UI
     LastError = nil,
     LastStatus = "booting",
@@ -298,7 +343,7 @@ S.State = {
 }
 
 S.ConfigFolder = "DevKage_Configs"
-S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion_v1_4.json"
+S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion_v1_5_ue.json"
 S.LegacyConfigPath = S.ConfigFolder .. "/_void_suite_companion.json"
 
 function S:Track(connection)
@@ -338,6 +383,215 @@ function S:DisconnectAll()
             c:Disconnect()
         end)
     end
+end
+
+function S:DiagEvent(kind, message)
+    local d = self.State and self.State.Diagnostics
+    if not d or (self.Config and self.Config.DiagnosticsEnabled == false) then return end
+    local elapsed = os.clock() - (d.StartedAt or os.clock())
+    local line = string.format("%7.3f | %-12s | %s", elapsed, tostring(kind or "event"), tostring(message or ""))
+    d.LastEvent = line
+    local log = d.Log
+    log[#log + 1] = line
+    local maxLog = math.clamp(math.floor(tonumber(self.Config and self.Config.DiagnosticsLogMax) or 96), 20, 300)
+    while #log > maxLog do
+        table.remove(log, 1)
+    end
+end
+
+function S:DiagBootStage(name, status, detail)
+    local d = self.State and self.State.Diagnostics
+    if not d then return end
+    d.BootStages[tostring(name)] = {
+        status = tostring(status or "unknown"),
+        detail = detail and tostring(detail) or nil,
+        at = os.clock(),
+    }
+    self:DiagEvent("boot:" .. tostring(name), tostring(status or "unknown") .. (detail and (" | " .. tostring(detail)) or ""))
+end
+
+function S:GetExecutorLabel()
+    local name = "unknown"
+    if type(identifyexecutor) == "function" then
+        local ok, a, b = pcall(identifyexecutor)
+        if ok then
+            name = tostring(a or "unknown")
+            if b ~= nil then name = name .. " " .. tostring(b) end
+        end
+    elseif type(getexecutorname) == "function" then
+        local ok, value = pcall(getexecutorname)
+        if ok and value ~= nil then name = tostring(value) end
+    end
+    return name
+end
+
+function S:GetWeaponDiagnostic()
+    local item = self:GetEquippedItem()
+    if not item then return "none", "nil" end
+    local name = "unknown"
+    local objectId = nil
+    pcall(function()
+        name = tostring(self:ItemGet(item, "Name") or item.Name or "unknown")
+        objectId = self:ItemGet(item, "ObjectID")
+    end)
+    return name, tostring(objectId)
+end
+
+function S:GetOwnershipDiagnostic()
+    if tostring(self.Config.CoexistenceMode or "Enhance") == "Passive" then
+        return "passive"
+    end
+    if self.State.ExternalDetected or self:IsExternalBackoffActive() then
+        return "external:" .. tostring(self.State.ExternalReason or "detected")
+    end
+    if self.State.OwnsRoot then
+        return "suite"
+    end
+    return "local"
+end
+
+function S:BuildDiagnosticReport()
+    local d = self.State.Diagnostics or {}
+    local now = os.clock()
+    local weaponName, objectId = self:GetWeaponDiagnostic()
+    local root = self:GetRoot()
+    local hum = self:GetHumanoid()
+    local remote = self:GetUseItemRemote()
+    local enumOk = self:ToGameEnum("StartShooting") ~= nil
+    local fighter = self.State.FighterController
+    local localFighter = fighter and fighter.LocalFighter
+    local stages = {}
+    for name, entry in pairs(d.BootStages or {}) do
+        stages[#stages + 1] = string.format("%s=%s%s", tostring(name), tostring(entry.status), entry.detail and ("(" .. tostring(entry.detail) .. ")") or "")
+    end
+    table.sort(stages)
+
+    local lines = {
+        "DevKage Void Suite v1.5 UE Diagnostic Report",
+        "executor=" .. self:GetExecutorLabel(),
+        "placeId=" .. tostring(game.PlaceId) .. " gameId=" .. tostring(game.GameId),
+        string.format("uptime=%.2fs ready=%s running=%s status=%s", now - (d.StartedAt or now), tostring(self.Ready), tostring(self.Running), tostring(self.State.LastStatus)),
+        "boot=" .. table.concat(stages, ", "),
+        "lastError=" .. tostring(self.State.LastError or "none"),
+        "lastEvent=" .. tostring(d.LastEvent or "none"),
+        string.format("modules fighter=%s localFighter=%s utility=%s enum=%s mechanics=%s spectate=%s", tostring(fighter ~= nil), tostring(localFighter ~= nil), tostring(self.State.Utility ~= nil), tostring(self.State.EnumLibrary ~= nil), tostring(self.State.MechanicsController ~= nil), tostring(self.State.SpectateController ~= nil)),
+        string.format("character root=%s humanoid=%s hp=%s fighterSource=%s", tostring(root ~= nil), tostring(hum ~= nil), tostring(hum and hum.Health or "nil"), tostring(self.State.FighterSource)),
+        string.format("weapon name=%s objectId=%s remote=%s StartShootingEnum=%s", weaponName, objectId, tostring(remote ~= nil), tostring(enumOk)),
+        string.format("rage enabled=%s target=%s status=%s attempts=%d ok=%d fail=%d last=%s err=%s", tostring(self.Config.RageEnabled), tostring(self.State.RageLastTargetName or "-"), tostring(self.State.RageLastStatus or "-"), d.RageFireAttempts or 0, d.RageFireSuccess or 0, d.RageFireFail or 0, tostring(d.LastRageResult or "none"), tostring(self.State.RageLastFireError or d.LastRemoteError or "none")),
+        string.format("silent enabled=%s target=%s status=%s attempts=%d ok=%d fail=%d last=%s err=%s", tostring(self.Config.SilentEnabled), tostring(self.State.SilentLastTargetName or "-"), tostring(self.State.SilentLastStatus or "-"), d.SilentFireAttempts or 0, d.SilentFireSuccess or 0, d.SilentFireFail or 0, tostring(d.LastSilentResult or "none"), tostring(self.State.SilentLastFireError or d.LastRemoteError or "none")),
+        string.format("root owner=%s displacement=%.2f maxDisplacement=%.2f writes=%d externalClaims=%d", self:GetOwnershipDiagnostic(), tonumber(d.LastRootDisplacement) or 0, tonumber(d.MaxRootDisplacement) or 0, d.RootWrites or 0, d.ExternalClaims or 0),
+        string.format("loops heartbeat=%d age=%.3f postSim=%d age=%.3f probe=%d age=%.3f restore=%d age=%.3f ui=%d age=%.3f", d.HeartbeatTicks or 0, d.LastHeartbeatAt and d.LastHeartbeatAt > 0 and (now - d.LastHeartbeatAt) or -1, d.PostSimulationTicks or 0, d.LastPostSimulationAt and d.LastPostSimulationAt > 0 and (now - d.LastPostSimulationAt) or -1, d.ExternalProbeTicks or 0, d.LastProbeAt and d.LastProbeAt > 0 and (now - d.LastProbeAt) or -1, d.RestoreTicks or 0, d.LastRestoreAt and d.LastRestoreAt > 0 and (now - d.LastRestoreAt) or -1, d.UiTicks or 0, d.LastUiAt and d.LastUiAt > 0 and (now - d.LastUiAt) or -1),
+        string.format("timing heartbeatDt=%.5f postSimDt=%.5f pingMs=%d", tonumber(d.LastHeartbeatDt) or 0, tonumber(d.LastPostSimulationDt) or 0, math.floor(self:GetPing() * 1000 + 0.5)),
+        string.format("coexist mode=%s externalDetected=%s reason=%s backoff=%s useExternalOrigin=%s", tostring(self.Config.CoexistenceMode), tostring(self.State.ExternalDetected), tostring(self.State.ExternalReason or "none"), tostring(self:IsExternalBackoffActive()), tostring(self.Config.UseExternalServerOrigin)),
+        string.format("ui linked=%s open=%s maskShard=%s", tostring(self.State.MainMenuLinked), tostring(self.State.GuiOpen), tostring(ENV.__DevKageMaskShard ~= nil)),
+        "",
+        "recent events:",
+    }
+    local log = d.Log or {}
+    local first = math.max(1, #log - 29)
+    for i = first, #log do
+        lines[#lines + 1] = log[i]
+    end
+    return table.concat(lines, "\n")
+end
+
+function S:SaveDiagnosticReport()
+    local report = self:BuildDiagnosticReport()
+    if not (writefile and type(writefile) == "function") then
+        return false, "writefile unavailable"
+    end
+    pcall(function()
+        if makefolder and isfolder and not isfolder(self.ConfigFolder) then
+            makefolder(self.ConfigFolder)
+        elseif makefolder and not isfolder then
+            makefolder(self.ConfigFolder)
+        end
+    end)
+    local path = self.ConfigFolder .. "/_void_suite_ue_diagnostics.txt"
+    local ok, err = pcall(writefile, path, report)
+    if ok then
+        self:DiagEvent("report", "saved " .. path)
+        return true, path
+    end
+    return false, tostring(err)
+end
+
+function S:CopyDiagnosticReport()
+    local report = self:BuildDiagnosticReport()
+    if type(setclipboard) == "function" then
+        local ok, err = pcall(setclipboard, report)
+        if ok then
+            self:DiagEvent("report", "copied to clipboard")
+            return true, "clipboard"
+        end
+        return false, tostring(err)
+    end
+    return false, "setclipboard unavailable"
+end
+
+function S:ResetDiagnosticCounters()
+    local d = self.State.Diagnostics
+    if not d then return end
+    local keepStart = os.clock()
+    local keepStages = d.BootStages or {}
+    self.State.Diagnostics = {
+        StartedAt = keepStart,
+        HeartbeatTicks = 0, PostSimulationTicks = 0, ExternalProbeTicks = 0, RestoreTicks = 0, UiTicks = 0,
+        RageFireAttempts = 0, RageFireSuccess = 0, RageFireFail = 0,
+        SilentFireAttempts = 0, SilentFireSuccess = 0, SilentFireFail = 0,
+        RootWrites = 0, ExternalClaims = 0, ModuleRefreshes = 0,
+        LastHeartbeatAt = 0, LastPostSimulationAt = 0, LastProbeAt = 0, LastRestoreAt = 0, LastUiAt = 0,
+        LastHeartbeatDt = 0, LastPostSimulationDt = 0,
+        LastRootDisplacement = 0, MaxRootDisplacement = 0,
+        LastModuleRefreshAt = 0, LastRemoteCallAt = 0, LastRemoteError = nil,
+        LastRageResult = nil, LastSilentResult = nil, LastEvent = nil,
+        BootStages = keepStages,
+        Log = {},
+    }
+    self:DiagEvent("diagnostics", "counters reset")
+end
+
+function S:ApplyCompatibilityTestMode()
+    -- Non-invasive diagnostic mode: acquire targets and inspect modules, but do not
+    -- own the root or automatically send combat remotes. Useful for isolating UE issues.
+    local c = self.Config
+    c.CoexistenceMode = "Passive"
+    c.UseExternalServerOrigin = true
+    c.RespectOtherMovement = true
+    c.Enabled = false
+    c.AntiAimEnabled = false
+    c.SpinEnabled = false
+    c.SilentManipulation = false
+    c.RageForceWeapon = false
+    c.RageInputAssist = false
+    c.RageEnabled = true
+    c.RageAutoTarget = true
+    c.RageAutoShoot = false
+    c.SilentEnabled = true
+    c.SilentAutoShoot = false
+    c.SilentOnlyWhenMouseDown = false
+    self:RefreshCombatModules()
+    self:AcquireRageTarget(true)
+    self:AcquireSilentTarget(true)
+    self:SaveConfig()
+    self:RefreshAllControls()
+    self:DiagEvent("compat", "compatibility test mode enabled")
+end
+
+function S:MaybeRefreshMissingModules()
+    if not self.Config.DiagnosticsAutoRefreshModules then return end
+    local d = self.State.Diagnostics
+    if not d then return end
+    local now = os.clock()
+    local interval = math.max(tonumber(self.Config.DiagnosticsModuleRefreshInterval) or 2.0, 0.5)
+    if now - (d.LastModuleRefreshAt or 0) < interval then return end
+    local missing = self.State.FighterController == nil
+        or self.State.Utility == nil
+        or self.State.EnumLibrary == nil
+    if not missing then return end
+    d.LastModuleRefreshAt = now
+    self:RefreshCombatModules()
+    self:DiagEvent("modules", "auto refresh for missing dependency")
 end
 
 function S:MergeConfig(source)
@@ -451,6 +705,11 @@ function S:SafeRequireModule(moduleRef, timeoutSec)
 end
 
 function S:RefreshCombatModules()
+    local d = self.State.Diagnostics
+    if d then
+        d.ModuleRefreshes = (d.ModuleRefreshes or 0) + 1
+        d.LastModuleRefreshAt = os.clock()
+    end
     self:RefreshFighterController()
 
     local rs = self.Services.ReplicatedStorage
@@ -483,6 +742,15 @@ function S:RefreshCombatModules()
     if spectate then
         self.State.SpectateController = spectate
     end
+
+    self:DiagEvent("modules", string.format(
+        "fighter=%s utility=%s enum=%s mechanics=%s spectate=%s",
+        tostring(self.State.FighterController ~= nil),
+        tostring(self.State.Utility ~= nil),
+        tostring(self.State.EnumLibrary ~= nil),
+        tostring(self.State.MechanicsController ~= nil),
+        tostring(self.State.SpectateController ~= nil)
+    ))
 end
 
 function S:GetRoot()
@@ -526,6 +794,10 @@ function S:IsExternalBackoffActive()
 end
 
 function S:MarkExternalOwner(cf, reason)
+    local d = self.State.Diagnostics
+    if d then
+        d.ExternalClaims = (d.ExternalClaims or 0) + 1
+    end
     if cf then
         self.State.ExternalServerCF = cf
     end
@@ -534,6 +806,7 @@ function S:MarkExternalOwner(cf, reason)
     self.State.ExternalReason = reason or "external"
     self.State.OwnsRoot = false
     self.State.OwnRootFrame = false
+    self:DiagEvent("root-owner", tostring(self.State.ExternalReason))
 end
 
 function S:DetectExternalServerState(root)
@@ -564,6 +837,11 @@ function S:DetectExternalServerState(root)
 
     if visible then
         local displacement = (observed.Position - visible.Position).Magnitude
+        local d = self.State.Diagnostics
+        if d then
+            d.LastRootDisplacement = displacement
+            d.MaxRootDisplacement = math.max(tonumber(d.MaxRootDisplacement) or 0, displacement)
+        end
         local ownCF = self.State.LastOwnServerCF
         local looksLikeOurWrite = false
         if ownCF then
@@ -2079,6 +2357,8 @@ end
 
 
 function S:FireRageShot()
+    local d = self.State.Diagnostics
+    if d then d.RageFireAttempts = (d.RageFireAttempts or 0) + 1 end
     local target = self.State.RageTarget
     if not self:IsValidRageTarget(target) then
         return false, "invalid target"
@@ -2139,6 +2419,7 @@ function S:FireRageShot()
         local mode = self:ResolvePayloadMode(self.Config.RagePayloadMode, i)
         local data = self:BuildShotData(hitPart, origin, targetPos, mode, self.Config.RageHitJitter)
         if data then
+            if d then d.LastRemoteCallAt = os.clock() end
             local ok, err = pcall(function()
                 remote:FireServer(objectId, actionEnum, data, nil)
             end)
@@ -2146,6 +2427,7 @@ function S:FireRageShot()
                 fired = true
             else
                 lastError = err
+                if d then d.LastRemoteError = tostring(err) end
             end
         end
     end
@@ -2155,10 +2437,19 @@ function S:FireRageShot()
         self.State.RageLastShot = now
         self.State.LastCombatShot = now
         self.State.RageLastFireError = nil
+        if d then
+            d.RageFireSuccess = (d.RageFireSuccess or 0) + 1
+            d.LastRageResult = "firing"
+        end
         return true, "firing"
     end
 
     self.State.RageLastFireError = tostring(lastError)
+    if d then
+        d.RageFireFail = (d.RageFireFail or 0) + 1
+        d.LastRageResult = "fire error"
+    end
+    self:DiagEvent("rage-fire", "failed: " .. tostring(lastError))
     return false, "fire error"
 end
 
@@ -2303,6 +2594,8 @@ function S:CanSilentFire()
 end
 
 function S:FireSilentShot()
+    local d = self.State.Diagnostics
+    if d then d.SilentFireAttempts = (d.SilentFireAttempts or 0) + 1 end
     local target = self.State.SilentTarget
     if not self:IsValidSilentTarget(target) then
         target = self:AcquireSilentTarget(true)
@@ -2345,6 +2638,7 @@ function S:FireSilentShot()
     local data = self:BuildShotData(part, origin, targetPos, mode, self.Config.SilentHitJitter)
     if not data then return false, "payload" end
 
+    if d then d.LastRemoteCallAt = os.clock() end
     local ok, err = pcall(function()
         remote:FireServer(objectId, startShooting, data, nil)
     end)
@@ -2355,15 +2649,26 @@ function S:FireSilentShot()
         self.State.LastCombatShot = now
         self.State.SilentLastFireError = nil
         self.State.SilentLastStatus = "firing"
+        if d then
+            d.SilentFireSuccess = (d.SilentFireSuccess or 0) + 1
+            d.LastSilentResult = "firing"
+        end
         return true, "firing"
     end
 
     self.State.SilentLastFireError = tostring(err)
     self.State.SilentLastStatus = "fire error"
+    if d then
+        d.SilentFireFail = (d.SilentFireFail or 0) + 1
+        d.LastSilentResult = "fire error"
+        d.LastRemoteError = tostring(err)
+    end
+    self:DiagEvent("silent-fire", "failed: " .. tostring(err))
     return false, "fire error"
 end
 
 function S:UpdateCombatFire(dt)
+    self:MaybeRefreshMissingModules()
     self:MaintainRageWeapon()
     self:UpdateDeflectionState()
     local rageReady = self:UpdateRageTarget(dt)
@@ -2656,6 +2961,7 @@ end
 
 function S:RestoreOwnedLocal(force)
     if not self.State.OwnRootFrame and not force then return end
+    local d = self.State.Diagnostics
     local root = self:GetRoot()
     if not root or not root.Parent then
         self.State.OwnRootFrame = false
@@ -2670,6 +2976,10 @@ function S:RestoreOwnedLocal(force)
         if self.State.LocalRestoreAV then root.AssemblyAngularVelocity = self.State.LocalRestoreAV end
     end)
 
+    if d then
+        d.RestoreTicks = (d.RestoreTicks or 0) + 1
+        d.LastRestoreAt = os.clock()
+    end
     self.State.OwnRootFrame = false
     if force then
         self.State.OwnsRoot = false
@@ -2679,6 +2989,11 @@ end
 
 
 function S:PreRenderExternalProbe()
+    local d = self.State.Diagnostics
+    if d then
+        d.ExternalProbeTicks = (d.ExternalProbeTicks or 0) + 1
+        d.LastProbeAt = os.clock()
+    end
     if not self.Running then return end
     if tostring(self.Config.CoexistenceMode or "Enhance") ~= "Enhance" then return end
 
@@ -2701,6 +3016,12 @@ function S:PreRenderExternalProbe()
 end
 
 function S:PostSimulationStep(dt)
+    local d = self.State.Diagnostics
+    if d then
+        d.PostSimulationTicks = (d.PostSimulationTicks or 0) + 1
+        d.LastPostSimulationAt = os.clock()
+        d.LastPostSimulationDt = tonumber(dt) or 0
+    end
     if not self.Running or not self:IsAlive() then
         self:RestoreOwnedLocal(true)
         return
@@ -2743,6 +3064,7 @@ function S:PostSimulationStep(dt)
     self.State.OwnsRoot = true
     self.State.OwnRootFrame = true
 
+    if d then d.RootWrites = (d.RootWrites or 0) + 1 end
     pcall(function()
         root.CFrame = serverCF
         if self.Config.Enabled and self.State.Phase == "hide" and self.Config.VelocityNoise then
@@ -3031,7 +3353,7 @@ function S:BuildGui()
         ZIndex = 5,
     })
 
-    local title = self:MakeText(header, "devkage // hvh companion", 14, 7)
+    local title = self:MakeText(header, "devkage // ue diagnostic companion", 14, 7)
     title.Position = UDim2.fromOffset(8, 0)
     title.Size = UDim2.new(1, -110, 1, 0)
 
@@ -3070,7 +3392,7 @@ function S:BuildGui()
     self.Controls = {}
     self.ControlRefreshers = {}
 
-    local names = { "rage", "silent", "void", "anti", "misc" }
+    local names = { "rage", "silent", "void", "anti", "debug", "misc" }
     for i, name in ipairs(names) do
         local button = self:Create("TextButton", {
             Parent = tabBar,
@@ -3134,6 +3456,7 @@ function S:BuildGui()
     self:BuildSilentTab(self.Tabs.silent.page)
     self:BuildVoidTab(self.Tabs.void.page)
     self:BuildAntiTab(self.Tabs.anti.page)
+    self:BuildUEDebugTab(self.Tabs.debug.page)
     self:BuildMiscTab(self.Tabs.misc.page)
     self:SelectTab("rage")
     self:RefreshAllControls()
@@ -3781,6 +4104,72 @@ function S:ApplyPreset(name)
     self:RefreshAllControls()
 end
 
+function S:AddDebugBlock(parent, initialText, height)
+    local row = self:Row(parent, height or 52)
+    local label = self:MakeText(row, initialText or "", 10, 7)
+    label.Position = UDim2.fromOffset(8, 4)
+    label.Size = UDim2.new(1, -16, 1, -8)
+    label.TextColor3 = Color3.fromRGB(175, 175, 175)
+    label.TextWrapped = true
+    label.TextYAlignment = Enum.TextYAlignment.Top
+    return row, label
+end
+
+function S:BuildUEDebugTab(page)
+    self:AddSection(page, "ue runtime health")
+    local _, moduleLabel = self:AddDebugBlock(page, "modules: booting", 60)
+    self.DebugModulesLabel = moduleLabel
+    local _, combatLabel = self:AddDebugBlock(page, "combat: waiting", 60)
+    self.DebugCombatLabel = combatLabel
+    local _, rootLabel = self:AddDebugBlock(page, "root: waiting", 60)
+    self.DebugRootLabel = rootLabel
+    local _, loopLabel = self:AddDebugBlock(page, "loops: waiting", 60)
+    self.DebugLoopsLabel = loopLabel
+    local _, errorLabel = self:AddDebugBlock(page, "error: none", 72)
+    self.DebugErrorLabel = errorLabel
+
+    self:AddSection(page, "diagnostic controls")
+    self:AddToggle(page, "DiagnosticsEnabled", "diagnostics enabled")
+    self:AddToggle(page, "DiagnosticsVerbose", "verbose event log")
+    self:AddToggle(page, "DiagnosticsAutoRefreshModules", "auto refresh missing modules")
+    self:AddSlider(page, "DiagnosticsModuleRefreshInterval", "module refresh interval", 0.5, 10, 0.5, "s")
+    self:AddSlider(page, "DiagnosticsLogMax", "event log size", 20, 200, 10, "")
+    self:AddToggle(page, "DiagnosticsSaveOnError", "save report on loop error")
+    self:AddToggle(page, "DiagnosticsShowLoopAges", "show loop ages")
+
+    self:AddSection(page, "one-match isolation")
+    self:AddButton(page, "compatibility test mode (no auto fire)", function()
+        self:ApplyCompatibilityTestMode()
+    end)
+    self:AddButton(page, "force module refresh", function()
+        self:RefreshCombatModules()
+    end)
+    self:AddButton(page, "retarget without firing", function()
+        local oldRage = self.Config.RageAutoShoot
+        local oldSilent = self.Config.SilentAutoShoot
+        self.Config.RageAutoShoot = false
+        self.Config.SilentAutoShoot = false
+        self:AcquireRageTarget(true)
+        self:AcquireSilentTarget(true)
+        self.Config.RageAutoShoot = oldRage
+        self.Config.SilentAutoShoot = oldSilent
+        self:DiagEvent("target", "manual diagnostic retarget")
+    end)
+
+    self:AddSection(page, "report")
+    self:AddButton(page, "copy UE diagnostic report", function()
+        local ok, msg = self:CopyDiagnosticReport()
+        self:DiagEvent("report", ok and ("copy ok: " .. tostring(msg)) or ("copy failed: " .. tostring(msg)))
+    end)
+    self:AddButton(page, "save UE diagnostic report", function()
+        local ok, msg = self:SaveDiagnosticReport()
+        self:DiagEvent("report", ok and ("save ok: " .. tostring(msg)) or ("save failed: " .. tostring(msg)))
+    end)
+    self:AddButton(page, "reset diagnostic counters", function()
+        self:ResetDiagnosticCounters()
+    end)
+end
+
 function S:BuildMiscTab(page)
     self:AddSection(page, "coexistence")
     self:AddCycle(page, "CoexistenceMode", "root ownership", { "Enhance", "Standalone", "Passive" })
@@ -3801,6 +4190,10 @@ function S:BuildMiscTab(page)
     self:AddButton(page, "apply stable coexist", function()
         self:ApplyPreset("Stable Coexist")
     end)
+
+    self:AddSection(page, "ue diagnostics")
+    self:AddButton(page, "open debug tab", function() self:SelectTab("debug") end)
+    self:AddButton(page, "save diagnostic report", function() self:SaveDiagnosticReport() end)
 
     self:AddSection(page, "runtime api")
     self:AddButton(page, "copy prediction api name", function()
@@ -3829,6 +4222,11 @@ end
 function S:UpdateUi(dt)
     if not self.Gui then return end
     local now = os.clock()
+    local d = self.State.Diagnostics
+    if d then
+        d.UiTicks = (d.UiTicks or 0) + 1
+        d.LastUiAt = now
+    end
 
     if now - self.State.LastUiSync >= 0.05 then
         self.State.LastUiSync = now
@@ -3898,6 +4296,60 @@ function S:UpdateUi(dt)
             tostring(self.State.SilentLastTargetName or "-"),
             tostring(self.State.SilentLastStatus or "idle")
         )
+    end
+
+    if self.DebugModulesLabel or self.DebugCombatLabel or self.DebugRootLabel or self.DebugLoopsLabel or self.DebugErrorLabel then
+        local weaponName, objectId = self:GetWeaponDiagnostic()
+        local remote = self:GetUseItemRemote()
+        local enumOk = self:ToGameEnum("StartShooting") ~= nil
+        local root = self:GetRoot()
+        local hum = self:GetHumanoid()
+        if self.DebugModulesLabel then
+            self.DebugModulesLabel.Text = string.format(
+                "executor: %s\nfighter:%s local:%s utility:%s enum:%s mechanics:%s spectate:%s",
+                self:GetExecutorLabel(),
+                tostring(self.State.FighterController ~= nil),
+                tostring(self.State.FighterController and self.State.FighterController.LocalFighter ~= nil),
+                tostring(self.State.Utility ~= nil),
+                tostring(self.State.EnumLibrary ~= nil),
+                tostring(self.State.MechanicsController ~= nil),
+                tostring(self.State.SpectateController ~= nil)
+            )
+        end
+        if self.DebugCombatLabel then
+            self.DebugCombatLabel.Text = string.format(
+                "weapon:%s id:%s remote:%s enum:%s\nrage:%s [%s]  silent:%s [%s]",
+                weaponName, objectId, tostring(remote ~= nil), tostring(enumOk),
+                tostring(self.State.RageLastTargetName or "-"), tostring(self.State.RageLastStatus or "-"),
+                tostring(self.State.SilentLastTargetName or "-"), tostring(self.State.SilentLastStatus or "-")
+            )
+        end
+        if self.DebugRootLabel then
+            self.DebugRootLabel.Text = string.format(
+                "root:%s hp:%s source:%s owner:%s\ndisplacement:%.1f max:%.1f reason:%s",
+                tostring(root ~= nil), tostring(hum and math.floor(hum.Health + 0.5) or "nil"), tostring(self.State.FighterSource),
+                self:GetOwnershipDiagnostic(), tonumber(d and d.LastRootDisplacement) or 0, tonumber(d and d.MaxRootDisplacement) or 0,
+                tostring(self.State.ExternalReason or "none")
+            )
+        end
+        if self.DebugLoopsLabel and d then
+            local hbAge = d.LastHeartbeatAt > 0 and (now - d.LastHeartbeatAt) or -1
+            local psAge = d.LastPostSimulationAt > 0 and (now - d.LastPostSimulationAt) or -1
+            local prAge = d.LastProbeAt > 0 and (now - d.LastProbeAt) or -1
+            self.DebugLoopsLabel.Text = string.format(
+                "HB:%d age:%.3f  Post:%d age:%.3f\nProbe:%d age:%.3f  Restore:%d  Writes:%d",
+                d.HeartbeatTicks or 0, hbAge, d.PostSimulationTicks or 0, psAge,
+                d.ExternalProbeTicks or 0, prAge, d.RestoreTicks or 0, d.RootWrites or 0
+            )
+        end
+        if self.DebugErrorLabel then
+            self.DebugErrorLabel.Text = string.format(
+                "last error: %s\nremote error: %s\nlast event: %s",
+                tostring(self.State.LastError or "none"),
+                tostring((d and d.LastRemoteError) or self.State.RageLastFireError or self.State.SilentLastFireError or "none"),
+                tostring((d and d.LastEvent) or "none")
+            )
+        end
     end
 end
 
@@ -4020,52 +4472,90 @@ function S:UnregisterMaskShard()
 end
 
 function S:StartLoops()
-    -- Targeting/fire loop. It never replaces Gun/Melee/CameraController methods.
-    self:Track(self.Services.RunService.Heartbeat:Connect(function(dt)
-        if not self.Running then return end
-        local ok, err = pcall(function()
-            self:UpdateCombatFire(dt or 0)
-        end)
-        if not ok then
-            self.State.LastError = tostring(err)
-        end
-    end))
-
-    -- One server-CFrame writer for Void + Rage positioning + Anti-Aim.
-    -- This is intentionally PostSimulation so local rendering can be restored separately.
-    self:Track(self.Services.RunService.PostSimulation:Connect(function(dt)
-        if not self.Running then return end
-        local ok, err = pcall(function()
-            self:PostSimulationStep(dt or 0)
-        end)
-        if not ok then
-            self.State.LastError = tostring(err)
-            if self.Config.AutoRecover then
-                pcall(function() self:RestoreOwnedLocal(true) end)
+    -- Targeting/fire loop with independent error capture so one UE callback failure
+    -- does not silently kill the rest of the companion.
+    local hbOk, hbConn = pcall(function()
+        return self.Services.RunService.Heartbeat:Connect(function(dt)
+            if not self.Running then return end
+            local d = self.State.Diagnostics
+            if d then
+                d.HeartbeatTicks = (d.HeartbeatTicks or 0) + 1
+                d.LastHeartbeatAt = os.clock()
+                d.LastHeartbeatDt = tonumber(dt) or 0
             end
-        end
-    end))
-
-    -- Probe before normal render-priority 0 restores. This catches another script
-    -- that wrote its server CFrame after our PostSimulation callback.
-    self:Bind("DK_HVHCompanion_ExternalProbe", 90, function()
-        if not self.Running then return end
-        self:PreRenderExternalProbe()
+            local ok, err = pcall(function()
+                self:UpdateCombatFire(dt or 0)
+            end)
+            if not ok then
+                self.State.LastError = "heartbeat: " .. tostring(err)
+                self:DiagEvent("heartbeat-error", tostring(err))
+                if self.Config.DiagnosticsSaveOnError then pcall(function() self:SaveDiagnosticReport() end) end
+            end
+        end)
     end)
+    if hbOk and hbConn then
+        self:Track(hbConn)
+    else
+        self.State.LastError = "Heartbeat connect: " .. tostring(hbConn)
+        self:DiagEvent("loop-connect", self.State.LastError)
+    end
 
-    -- Restore only frames that this companion itself wrote. If another script owns
-    -- server CFrame, this does nothing and leaves that script's restore loop alone.
-    self:Bind("DK_HVHCompanion_LocalRestore", 105, function()
+    local postOk, postConn = pcall(function()
+        return self.Services.RunService.PostSimulation:Connect(function(dt)
+            if not self.Running then return end
+            local ok, err = pcall(function()
+                self:PostSimulationStep(dt or 0)
+            end)
+            if not ok then
+                self.State.LastError = "postsim: " .. tostring(err)
+                self:DiagEvent("postsim-error", tostring(err))
+                if self.Config.AutoRecover then
+                    pcall(function() self:RestoreOwnedLocal(true) end)
+                end
+                if self.Config.DiagnosticsSaveOnError then pcall(function() self:SaveDiagnosticReport() end) end
+            end
+        end)
+    end)
+    if postOk and postConn then
+        self:Track(postConn)
+    else
+        self.State.LastError = "PostSimulation connect: " .. tostring(postConn)
+        self:DiagEvent("loop-connect", self.State.LastError)
+    end
+
+    local probeOk = self:Bind("DK_HVHCompanion_ExternalProbe", 90, function()
+        if not self.Running then return end
+        local ok, err = pcall(function() self:PreRenderExternalProbe() end)
+        if not ok then
+            self.State.LastError = "probe: " .. tostring(err)
+            self:DiagEvent("probe-error", tostring(err))
+        end
+    end)
+    if not probeOk then self:DiagEvent("loop-connect", "ExternalProbe bind failed") end
+
+    local restoreOk = self:Bind("DK_HVHCompanion_LocalRestore", 105, function()
         if not self.Running then return end
         if self.State.OwnRootFrame then
-            self:RestoreOwnedLocal(false)
+            local ok, err = pcall(function() self:RestoreOwnedLocal(false) end)
+            if not ok then
+                self.State.LastError = "restore: " .. tostring(err)
+                self:DiagEvent("restore-error", tostring(err))
+            end
         end
     end)
+    if not restoreOk then self:DiagEvent("loop-connect", "LocalRestore bind failed") end
 
-    self:Bind("DK_HVHCompanion_UI", Enum.RenderPriority.Last.Value + 4, function(dt)
+    local uiOk = self:Bind("DK_HVHCompanion_UI", Enum.RenderPriority.Last.Value + 4, function(dt)
         if not self.Running then return end
-        self:UpdateUi(dt or 0)
+        local ok, err = pcall(function() self:UpdateUi(dt or 0) end)
+        if not ok then
+            self.State.LastError = "ui: " .. tostring(err)
+            self:DiagEvent("ui-error", tostring(err))
+        end
     end)
+    if not uiOk then self:DiagEvent("loop-connect", "UI bind failed") end
+
+    self:DiagEvent("loops", string.format("heartbeat=%s postSimulation=%s probe=%s restore=%s ui=%s", tostring(hbOk), tostring(postOk), tostring(probeOk), tostring(restoreOk), tostring(uiOk)))
 end
 
 function S:Unload(reason)
@@ -4095,10 +4585,16 @@ end
 
 function S:BootStep(name, callback)
     self.State.LastStatus = "boot:" .. tostring(name)
+    self:DiagBootStage(name, "start")
     local ok, result = pcall(callback)
     if not ok then
+        self:DiagBootStage(name, "failed", result)
+        if self.Config and self.Config.DiagnosticsSaveOnError then
+            pcall(function() self:SaveDiagnosticReport() end)
+        end
         error("[VoidSuite boot:" .. tostring(name) .. "] " .. tostring(result), 0)
     end
+    self:DiagBootStage(name, "ok")
     return result
 end
 
@@ -4211,6 +4707,7 @@ function S:Init()
 
     self.Ready = true
     self.State.LastStatus = "ready"
+    self:DiagEvent("ready", "initialization complete")
 end
 
 task.spawn(function()
@@ -4220,6 +4717,10 @@ task.spawn(function()
     if not ok then
         S.State.LastError = tostring(err)
         S.State.LastStatus = "error"
+        pcall(function() S:DiagEvent("fatal", tostring(err)) end)
+        if S.Config and S.Config.DiagnosticsSaveOnError then
+            pcall(function() S:SaveDiagnosticReport() end)
+        end
         pcall(function()
             warn("[DevKage Void Suite] " .. tostring(err))
         end)
