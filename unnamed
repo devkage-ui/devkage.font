@@ -1,11 +1,12 @@
 --[[
-    DevKage Void Suite Companion v1.1
+    DevKage Void Suite Companion v1.2
     Standalone / coexistence-first companion for DevKage + MaskShard.
 
     Goals:
+      * Rage bot with match-aware targeting, weapon selection, prediction and void sync.
       * Void spam with local visual restore.
       * Void/self prediction + reusable target prediction API.
-      * Feature-rich spinbot without hooking game modules/remotes.
+      * Feature-rich spinbot without replacing CameraController or weapon-module functions.
       * Small DevKage-style UI that mirrors the main DevKage menu.
       * Safe reruns and coexistence with other executor scripts.
 
@@ -13,6 +14,7 @@
       getgenv().DevKageVoidSuite
       getgenv().DevKageVoidPredict(part, origin)
       getgenv().DevKageVoidOrigin()
+      getgenv().DevKageRageBot
 --]]
 
 local ENV = _G
@@ -35,7 +37,7 @@ end
 
 local S = {
     Name = "DevKage Void Suite",
-    Version = "1.1.0",
+    Version = "1.2.0",
     Running = true,
     Ready = false,
     Connections = {},
@@ -54,6 +56,7 @@ S.Services = {
     Stats = game:GetService("Stats"),
     Workspace = game:GetService("Workspace"),
     CoreGui = game:GetService("CoreGui"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
 }
 
 S.Player = S.Services.Players.LocalPlayer
@@ -88,6 +91,30 @@ S.Defaults = {
     RespectOtherMovement = true,
     AutoRecover = true,
     RespawnProof = true,
+
+    -- Rage bot
+    RageEnabled = false,
+    RageKey = "R",
+    RageAutoTarget = true,
+    RageAutoShoot = true,
+    RageTargetMode = "Cursor",
+    RageFOV = 650,
+    RageMaxDistance = 2500,
+    RageRequireOnScreen = true,
+    RageStickyTarget = true,
+    RageReacquireDelay = 0.08,
+    RageTeamCheck = true,
+    RageRespectImmune = true,
+    RageMatchOnly = true,
+    RageHitPart = "Head",
+    RageWeaponPick = "Primary",
+    RageForceWeapon = true,
+    RageShootAttempts = 1,
+    RageShotInterval = 0.05,
+    RagePrediction = true,
+    RagePredictionScale = 1.00,
+    RageVoidSync = true,
+    RageOrigin = "Visible",
 
     SpinEnabled = false,
     SpinMode = "Spin",
@@ -137,6 +164,17 @@ S.State = {
     AutoRotateHumanoid = nil,
     FighterController = nil,
     FighterSource = "character",
+    EnumLibrary = nil,
+    Utility = nil,
+    RageTarget = nil,
+    RageTargetPlayer = nil,
+    RageLastAcquire = 0,
+    RageLastShot = 0,
+    RageLastEquip = 0,
+    RageLastStatus = "off",
+    RageLastTargetName = "-",
+    RageLastTargetHP = 0,
+    RageLastFireError = nil,
     LastError = nil,
     LastStatus = "booting",
     FallbackVisible = true,
@@ -275,6 +313,47 @@ function S:RefreshFighterController()
     end
     if ok and type(controller) == "table" then
         self.State.FighterController = controller
+    end
+end
+
+
+function S:SafeRequireModule(moduleRef, timeoutSec)
+    if not moduleRef or typeof(moduleRef) ~= "Instance" or not moduleRef:IsA("ModuleScript") then
+        return nil
+    end
+
+    local loader = ENV.InstanceRequire
+    local ok, result
+    if type(loader) == "function" then
+        ok, result = pcall(loader, moduleRef, timeoutSec or 2)
+    else
+        ok, result = pcall(require, moduleRef)
+    end
+
+    if ok and type(result) == "table" then
+        return result
+    end
+    return nil
+end
+
+function S:RefreshCombatModules()
+    self:RefreshFighterController()
+
+    local rs = self.Services.ReplicatedStorage
+    local modules = rs and rs:FindFirstChild("Modules")
+    if modules then
+        local enumsRef = modules:FindFirstChild("EnumLibrary")
+        local utilityRef = modules:FindFirstChild("Utility")
+
+        local enums = self:SafeRequireModule(enumsRef, 2)
+        if enums then
+            self.State.EnumLibrary = enums
+        end
+
+        local utility = self:SafeRequireModule(utilityRef, 2)
+        if utility then
+            self.State.Utility = utility
+        end
     end
 end
 
@@ -593,6 +672,839 @@ function S:PredictPart(part, origin)
     return base + offset
 end
 
+
+-- =========================================================
+-- Rage bot
+-- =========================================================
+
+S.RageMatchIdAttributes = {
+    "MatchId", "DuelId", "RoundId", "GameId", "MatchUUID", "ArenaId", "InstanceId"
+}
+
+S.RageActiveStateAttributes = {
+    "InDuel", "InMatch", "InRound", "InGame", "InFight",
+    "IsInMatch", "IsInDuel", "MatchActive", "Fighting"
+}
+
+S.RageSafeStateAttributes = {
+    "InSpawn", "InLobby", "IsSpectating", "InSafeZone",
+    "InIntermission", "IsRespawning"
+}
+
+S.RageMeleeNames = {
+    ["Battle Axe"] = true,
+    ["Chainsaw"] = true,
+    ["Daggers"] = true,
+    ["Fists"] = true,
+    ["Gunblade"] = true,
+    ["Katana"] = true,
+    ["Knife"] = true,
+    ["Scythe"] = true,
+    ["Trowel"] = true,
+}
+
+S.RageInfiniteAmmoNames = {
+    ["Energy Rifle"] = true,
+    ["Energy Pistols"] = true,
+}
+
+function S:GetMatchId(plr)
+    if not plr then return nil end
+
+    for _, key in ipairs(self.RageMatchIdAttributes) do
+        local value = plr:GetAttribute(key)
+        if value ~= nil and value ~= "" and value ~= 0 and value ~= false then
+            return tostring(value)
+        end
+    end
+
+    local char = plr.Character
+    if char then
+        for _, key in ipairs(self.RageMatchIdAttributes) do
+            local value = char:GetAttribute(key)
+            if value ~= nil and value ~= "" and value ~= 0 and value ~= false then
+                return tostring(value)
+            end
+        end
+    end
+    return nil
+end
+
+function S:IsPlayerInLiveFolder(plr)
+    if not plr then return false end
+    local live = self.Services.Workspace:FindFirstChild("Live")
+    if not live then return false end
+
+    if live:FindFirstChild(plr.Name) or live:FindFirstChild(tostring(plr.UserId)) then
+        return true
+    end
+
+    local char = plr.Character
+    if char and (char.Parent == live or char:IsDescendantOf(live)) then
+        return true
+    end
+
+    local fc = self.State.FighterController
+    if fc and type(fc.GetFighter) == "function" then
+        local ok, fighter = pcall(fc.GetFighter, fc, plr)
+        if ok and fighter and fighter.Entity and fighter.Entity.Parent then
+            if fighter.Entity.Parent == live or fighter.Entity:IsDescendantOf(live) then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+function S:IsActiveMatch()
+    local plr = self.Player
+    if not plr then return false end
+    local char = plr.Character
+    if not char then return false end
+
+    for _, key in ipairs(self.RageSafeStateAttributes) do
+        local value = plr:GetAttribute(key)
+        local charValue = char:GetAttribute(key)
+        if value == true or value == 1 or value == "true"
+            or charValue == true or charValue == 1 or charValue == "true" then
+            return false
+        end
+    end
+
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root then
+        return false
+    end
+
+    for _, key in ipairs(self.RageActiveStateAttributes) do
+        local value = plr:GetAttribute(key)
+        local charValue = char:GetAttribute(key)
+        if value == true or value == 1 or value == "true"
+            or charValue == true or charValue == 1 or charValue == "true" then
+            return true
+        end
+    end
+
+    if self:IsPlayerInLiveFolder(plr) then
+        return true
+    end
+
+    local myMatchId = self:GetMatchId(plr)
+    if myMatchId then
+        for _, other in ipairs(self.Services.Players:GetPlayers()) do
+            if other ~= plr and self:GetMatchId(other) == myMatchId then
+                return true
+            end
+        end
+    end
+
+    local fc = self.State.FighterController
+    if fc then
+        local localFighter = fc.LocalFighter
+        if localFighter and localFighter.Entity and localFighter.Entity.Parent then
+            return true
+        end
+
+        for _, list in ipairs({ fc.Fighters, fc.AllFighters }) do
+            if type(list) == "table" then
+                for _, fighter in pairs(list) do
+                    if fighter and fighter.Player and fighter.Player ~= plr
+                        and (fighter.IsEnemy or fighter.Enemy) then
+                        local enemyChar = fighter.Player.Character
+                        local enemyHum = enemyChar and enemyChar:FindFirstChildOfClass("Humanoid")
+                        if enemyHum and enemyHum.Health > 0 then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+function S:IsTeammate(targetPlayer)
+    if not targetPlayer or targetPlayer == self.Player then return true end
+    if not self.Config.RageTeamCheck then return false end
+
+    local myTeamId = self.Player and self.Player:GetAttribute("TeamID")
+    local theirTeamId = targetPlayer:GetAttribute("TeamID")
+    if myTeamId ~= nil and theirTeamId ~= nil and myTeamId == theirTeamId then
+        return true
+    end
+
+    if self.Player and self.Player.Team and targetPlayer.Team and self.Player.Team == targetPlayer.Team then
+        return true
+    end
+    return false
+end
+
+function S:IsTargetImmune(targetPlayer, char)
+    char = char or (targetPlayer and targetPlayer.Character)
+    if not char then return false end
+
+    if char:FindFirstChildOfClass("ForceField") then
+        return true
+    end
+
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if root and root:FindFirstChild("Attachment") then
+        return true
+    end
+
+    for _, key in ipairs({
+        "Invulnerable", "Immune", "IsImmune", "GodMode", "SpawnProtected",
+        "Protected", "InSafeZone"
+    }) do
+        local a = char:GetAttribute(key)
+        local b = targetPlayer and targetPlayer:GetAttribute(key)
+        if a == true or a == 1 or a == "true"
+            or b == true or b == 1 or b == "true" then
+            return true
+        end
+    end
+
+    return false
+end
+
+function S:WorldToScreen(position)
+    local camera = self.Services.Workspace.CurrentCamera
+    if not camera then return nil, false end
+
+    local custom = ENV.InstanceWorldToScreen
+    if type(custom) == "function" then
+        local ok, point, visible = pcall(custom, position, camera)
+        if ok and point then
+            return Vector2.new(point.X, point.Y), visible == true
+        end
+    end
+
+    local point, visible = camera:WorldToViewportPoint(position)
+    return Vector2.new(point.X, point.Y), visible == true and point.Z > 0
+end
+
+function S:IsValidRageTarget(char)
+    if not char or not char.Parent then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root then return false end
+
+    local targetPlayer = self.Services.Players:GetPlayerFromCharacter(char)
+    if not targetPlayer or targetPlayer == self.Player then return false end
+    if self:IsTeammate(targetPlayer) then return false end
+
+    local myRoot = self:GetRoot()
+    local maxDistance = math.max(tonumber(self.Config.RageMaxDistance) or 2500, 0)
+    if maxDistance > 0 and myRoot and (root.Position - myRoot.Position).Magnitude > maxDistance then
+        return false
+    end
+
+    if self.Config.RageRequireOnScreen then
+        local _, onScreen = self:WorldToScreen(root.Position)
+        if not onScreen then return false end
+    end
+
+    return true
+end
+
+function S:GetRageHitPart(char)
+    if not char then return nil end
+    local name = self.Config.RageHitPart
+
+    if name == "Closest" then
+        local myRoot = self:GetRoot()
+        local closest, best = nil, math.huge
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                local d = myRoot and (part.Position - myRoot.Position).Magnitude or 0
+                if d < best then
+                    best = d
+                    closest = part
+                end
+            end
+        end
+        return closest or char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+    elseif name == "Random" then
+        local options = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" }
+        for _ = 1, #options do
+            local pick = options[math.random(1, #options)]
+            local part = char:FindFirstChild(pick)
+            if part and part:IsA("BasePart") then
+                return part
+            end
+        end
+    end
+
+    return char:FindFirstChild(name)
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("HumanoidRootPart")
+end
+
+function S:ScoreRageTarget(char)
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return math.huge end
+
+    local mode = self.Config.RageTargetMode
+    if mode == "Lowest HP" then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        return hum and hum.Health or math.huge
+    elseif mode == "Distance" then
+        local myRoot = self:GetRoot()
+        return myRoot and (root.Position - myRoot.Position).Magnitude or math.huge
+    elseif mode == "Random" then
+        return math.random()
+    end
+
+    local point, onScreen = self:WorldToScreen(root.Position)
+    if not point or not onScreen then
+        return math.huge
+    end
+
+    local cursor = self.Services.UserInputService:GetMouseLocation()
+    local distance = (point - Vector2.new(cursor.X, cursor.Y)).Magnitude
+    local fov = math.max(tonumber(self.Config.RageFOV) or 650, 0)
+    if fov > 0 and distance > fov then
+        return math.huge
+    end
+    return distance
+end
+
+function S:AcquireRageTarget(force)
+    local now = os.clock()
+    local delay = math.max(tonumber(self.Config.RageReacquireDelay) or 0.08, 0)
+    if not force and now - (self.State.RageLastAcquire or 0) < delay then
+        return self.State.RageTarget
+    end
+    self.State.RageLastAcquire = now
+
+    local bestChar, bestScore = nil, math.huge
+    for _, targetPlayer in ipairs(self.Services.Players:GetPlayers()) do
+        if targetPlayer ~= self.Player and targetPlayer.Character then
+            local char = targetPlayer.Character
+            if self:IsValidRageTarget(char) then
+                local score = self:ScoreRageTarget(char)
+                if score < bestScore then
+                    bestChar = char
+                    bestScore = score
+                end
+            end
+        end
+    end
+
+    self.State.RageTarget = bestChar
+    self.State.RageTargetPlayer = bestChar and self.Services.Players:GetPlayerFromCharacter(bestChar) or nil
+
+    if bestChar then
+        local hum = bestChar:FindFirstChildOfClass("Humanoid")
+        self.State.RageLastTargetName = self.State.RageTargetPlayer and self.State.RageTargetPlayer.Name or bestChar.Name
+        self.State.RageLastTargetHP = hum and hum.Health or 0
+        self.State.RageLastStatus = "locked"
+    else
+        self.State.RageLastTargetName = "-"
+        self.State.RageLastTargetHP = 0
+        self.State.RageLastStatus = "searching"
+    end
+
+    return bestChar
+end
+
+function S:ClearRageTarget()
+    self.State.RageTarget = nil
+    self.State.RageTargetPlayer = nil
+    self.State.RageLastTargetName = "-"
+    self.State.RageLastTargetHP = 0
+end
+
+function S:GetLocalFighter()
+    local fc = self.State.FighterController
+    return fc and fc.LocalFighter or nil
+end
+
+function S:ItemGet(item, key)
+    if not item then return nil end
+    local ok, value = pcall(function()
+        if type(item.Get) == "function" then
+            return item:Get(key)
+        end
+        return item[key]
+    end)
+    return ok and value or nil
+end
+
+function S:IsMeleeItem(item)
+    if not item then return false end
+    local name = tostring(self:ItemGet(item, "Name") or item.Name or "")
+    if self.RageMeleeNames[name] then return true end
+    if string.find(string.lower(name), "melee", 1, true) then return true end
+
+    local itemType = tostring(self:ItemGet(item, "ItemType") or self:ItemGet(item, "Type") or self:ItemGet(item, "Category") or "")
+    return string.find(string.lower(itemType), "melee", 1, true) ~= nil
+end
+
+function S:GetEquippedItem()
+    local lf = self:GetLocalFighter()
+    return lf and lf.EquippedItem or nil
+end
+
+function S:GetRageAmmo()
+    local item = self:GetEquippedItem()
+    if not item then return 0, 0, false, false end
+
+    local name = tostring(self:ItemGet(item, "Name") or item.Name or "")
+    local melee = self:IsMeleeItem(item)
+    if self.RageInfiniteAmmoNames[name] then
+        return nil, nil, false, false
+    end
+
+    local current = tonumber(self:ItemGet(item, "CurrentAmmo") or self:ItemGet(item, "Ammo"))
+    local maximum = tonumber(self:ItemGet(item, "MaxAmmo") or self:ItemGet(item, "MaxBullets"))
+    local reloading = false
+    for _, key in ipairs({ "Reloading", "IsReloading", "IsReload" }) do
+        local value = self:ItemGet(item, key)
+        if value == true or value == 1 or value == "true" then
+            reloading = true
+            break
+        end
+    end
+
+    if melee then
+        return nil, nil, true, false
+    end
+    return current, maximum, false, reloading
+end
+
+function S:GetDesiredRageSlot()
+    local pick = self.Config.RageWeaponPick
+    if pick == "Secondary" then return 2 end
+    if pick == "Melee" then return 3 end
+    if pick == "Current" then return nil end
+    return 1
+end
+
+function S:GetFighterItems()
+    local lf = self:GetLocalFighter()
+    return lf and lf.Items or nil
+end
+
+function S:FindRageSlotItem(slot)
+    local items = self:GetFighterItems()
+    if not items or not slot then return nil end
+
+    if items[slot] then return items[slot] end
+    if items[tostring(slot)] then return items[tostring(slot)] end
+
+    for key, item in pairs(items) do
+        if item then
+            local itemSlot = tonumber(
+                self:ItemGet(item, "Slot")
+                or self:ItemGet(item, "Index")
+                or self:ItemGet(item, "ItemSlot")
+                or key
+            )
+            if itemSlot == slot then return item end
+
+            local itemType = tostring(self:ItemGet(item, "ItemType") or self:ItemGet(item, "Type") or "")
+            local lowType = string.lower(itemType)
+            if slot == 3 and string.find(lowType, "melee", 1, true) then return item end
+            if slot == 1 and (itemType == "Primary" or itemType == "1") then return item end
+            if slot == 2 and (itemType == "Secondary" or itemType == "2") then return item end
+        end
+    end
+
+    return nil
+end
+
+function S:GetItemSlot(item)
+    if not item then return nil end
+    if self:IsMeleeItem(item) then return 3 end
+
+    local items = self:GetFighterItems()
+    local objectId = self:ItemGet(item, "ObjectID")
+    if items and objectId ~= nil then
+        for slot = 1, 3 do
+            local candidate = items[slot] or items[tostring(slot)]
+            if candidate and self:ItemGet(candidate, "ObjectID") == objectId then
+                return slot
+            end
+        end
+    end
+
+    return tonumber(
+        self:ItemGet(item, "Slot")
+        or self:ItemGet(item, "Index")
+        or self:ItemGet(item, "ItemSlot")
+    )
+end
+
+function S:ToGameEnum(name)
+    local enums = self.State.EnumLibrary
+    if not enums then return nil end
+
+    local ok, value = pcall(function()
+        if type(enums.ToEnum) == "function" then
+            return enums:ToEnum(name)
+        end
+        return nil
+    end)
+    return ok and value or nil
+end
+
+function S:EquipRageWeapon()
+    if not self.Config.RageForceWeapon then return true end
+
+    local slot = self:GetDesiredRageSlot()
+    if not slot then return true end
+
+    local lf = self:GetLocalFighter()
+    if not lf then return false end
+
+    local equipped = lf.EquippedItem
+    if equipped and self:GetItemSlot(equipped) == slot then
+        return true
+    end
+
+    local now = os.clock()
+    if now - (self.State.RageLastEquip or 0) < 0.08 then
+        return false
+    end
+    self.State.RageLastEquip = now
+
+    local desired = self:FindRageSlotItem(slot)
+
+    pcall(function()
+        if type(lf.SwitchToSlot) == "function" then lf:SwitchToSlot(slot) end
+    end)
+    pcall(function()
+        if type(lf.EquipItem) == "function" then lf:EquipItem(slot) end
+    end)
+    pcall(function()
+        if type(lf.Equip) == "function" then lf:Equip(slot) end
+    end)
+
+    local fc = self.State.FighterController
+    if fc then
+        pcall(function()
+            if type(fc.SwitchItem) == "function" then fc:SwitchItem(slot) end
+        end)
+        pcall(function()
+            if type(fc.EquipItem) == "function" then fc:EquipItem(slot) end
+        end)
+    end
+
+    local useItem = self.Services.ReplicatedStorage
+        and self.Services.ReplicatedStorage:FindFirstChild("Remotes")
+    useItem = useItem and useItem:FindFirstChild("Replication")
+    useItem = useItem and useItem:FindFirstChild("Fighter")
+    useItem = useItem and useItem:FindFirstChild("UseItem")
+
+    local objectId = desired and self:ItemGet(desired, "ObjectID")
+    if useItem and objectId ~= nil then
+        for _, enumName in ipairs({ "Equip", "Switch", "Select", "EquipItem", "ChangeItem" }) do
+            local enumValue = self:ToGameEnum(enumName)
+            if enumValue ~= nil then
+                pcall(function()
+                    useItem:FireServer(objectId, enumValue, nil, nil)
+                end)
+            end
+        end
+    end
+
+    pcall(function()
+        local vim = game:GetService("VirtualInputManager")
+        local key = ({ Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three })[slot]
+        if key then
+            vim:SendKeyEvent(true, key, false, game)
+            task.defer(function()
+                pcall(function()
+                    vim:SendKeyEvent(false, key, false, game)
+                end)
+            end)
+        end
+    end)
+
+    return true
+end
+
+function S:GetMuzzlePosition()
+    local viewModels = self.Services.Workspace:FindFirstChild("ViewModels")
+    local firstPerson = viewModels and viewModels:FindFirstChild("FirstPerson")
+    if not firstPerson then return nil end
+
+    local playerName = self.Player and self.Player.Name or ""
+    for _, model in ipairs(firstPerson:GetChildren()) do
+        if model:IsA("Model") then
+            local name = model.Name or ""
+            local belongs = playerName == "" or string.find(name, playerName, 1, true) ~= nil
+            if belongs then
+                local itemVisual = model:FindFirstChild("ItemVisual")
+                local body = itemVisual and itemVisual:FindFirstChild("Body")
+                local primary = body and body:FindFirstChild("BodyPrimary")
+                local muzzle = primary and primary:FindFirstChild("_muzzle")
+
+                if muzzle and muzzle:IsA("Attachment") then
+                    return muzzle.WorldPosition
+                elseif muzzle and muzzle:IsA("BasePart") then
+                    return muzzle.Position
+                end
+
+                for _, desc in ipairs(model:GetDescendants()) do
+                    local low = string.lower(desc.Name or "")
+                    if string.find(low, "muzzle", 1, true) or string.find(low, "barrel", 1, true) then
+                        if desc:IsA("Attachment") then
+                            return desc.WorldPosition
+                        elseif desc:IsA("BasePart") then
+                            return desc.Position
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function S:GetRageOrigin()
+    local mode = self.Config.RageOrigin
+    if mode == "Muzzle" then
+        local muzzle = self:GetMuzzlePosition()
+        if muzzle then return muzzle end
+    elseif mode == "Root" then
+        local root = self:GetRoot()
+        if root then return root.Position end
+    end
+    return self:GetVisibleOrigin()
+end
+
+function S:PredictRagePart(part, origin)
+    if not part or typeof(part) ~= "Instance" or not part:IsA("BasePart") then
+        return nil
+    end
+
+    local base = part.Position
+    if not self.Config.RagePrediction then
+        return base
+    end
+
+    origin = origin or self:GetRageOrigin()
+    local distance = (base - origin).Magnitude
+    local leadTime = 0
+
+    if self.Config.ProjectileAssist then
+        local speed = math.max(tonumber(self.Config.ProjectileSpeed) or 3000, 1)
+        leadTime = leadTime + (distance / speed)
+    end
+    if self.Config.PingAssist then
+        leadTime = leadTime + (self:GetPing() * math.max(tonumber(self.Config.PingFactor) or 1, 0))
+    end
+
+    leadTime = leadTime
+        * math.max(tonumber(self.Config.PredictionMultiplier) or 1, 0)
+        * math.max(tonumber(self.Config.RagePredictionScale) or 1, 0)
+    leadTime = math.min(leadTime, math.max(tonumber(self.Config.PredictionMaxLead) or 0.35, 0))
+
+    local velocity = self:GetTargetVelocity(part)
+    local offset = velocity * leadTime
+    local cap = math.max(tonumber(self.Config.MaxPredictionStuds) or 18, 0)
+    if cap > 0 and offset.Magnitude > cap then
+        offset = offset.Unit * cap
+    end
+
+    return base + offset
+end
+
+function S:EncodeRageCFrame(cf)
+    local utility = self.State.Utility
+    if not utility then return cf end
+
+    local ok, value = pcall(function()
+        if type(utility.EncodeCFrame) == "function" then
+            return utility:EncodeCFrame(cf)
+        end
+        return cf
+    end)
+    return ok and value or cf
+end
+
+function S:GetUseItemRemote()
+    local rs = self.Services.ReplicatedStorage
+    local remotes = rs and rs:FindFirstChild("Remotes")
+    local replication = remotes and remotes:FindFirstChild("Replication")
+    local fighter = replication and replication:FindFirstChild("Fighter")
+    return fighter and fighter:FindFirstChild("UseItem") or nil
+end
+
+function S:CanRageFire()
+    if not self.Config.RageEnabled or not self.Config.RageAutoShoot then
+        return false, "off"
+    end
+
+    if self.Config.RageVoidSync and self.Config.Enabled and self.State.Phase == "hide" then
+        return false, "void hide"
+    end
+
+    local item = self:GetEquippedItem()
+    if not item then return false, "no weapon" end
+
+    local current, _, melee, reloading = self:GetRageAmmo()
+    if reloading then return false, "reloading" end
+    if not melee and current ~= nil and current <= 0 then return false, "no ammo" end
+
+    local now = os.clock()
+    local interval = math.max(tonumber(self.Config.RageShotInterval) or 0.055, 0.01)
+    if now - (self.State.RageLastShot or 0) < interval then
+        return false, "cooldown"
+    end
+
+    return true, "ready"
+end
+
+function S:FireRageShot()
+    local target = self.State.RageTarget
+    if not self:IsValidRageTarget(target) then
+        return false, "invalid target"
+    end
+
+    local targetPlayer = self.State.RageTargetPlayer
+    if self.Config.RageRespectImmune and self:IsTargetImmune(targetPlayer, target) then
+        return false, "immune"
+    end
+
+    if self.Config.RageForceWeapon then
+        self:EquipRageWeapon()
+    end
+
+    local canFire, reason = self:CanRageFire()
+    if not canFire then return false, reason end
+
+    local item = self:GetEquippedItem()
+    local objectId = item and self:ItemGet(item, "ObjectID")
+    if objectId == nil then return false, "object id" end
+
+    local hitPart = self:GetRageHitPart(target)
+    if not hitPart then return false, "hit part" end
+
+    local origin = self:GetRageOrigin()
+    local targetPos = self:PredictRagePart(hitPart, origin)
+    if not origin or not targetPos then return false, "prediction" end
+
+    local startShooting = self:ToGameEnum("StartShooting")
+    if startShooting == nil then
+        self:RefreshCombatModules()
+        startShooting = self:ToGameEnum("StartShooting")
+    end
+    if startShooting == nil then return false, "enum" end
+
+    local remote = self:GetUseItemRemote()
+    if not remote then return false, "remote" end
+
+    local look = CFrame.new(origin, targetPos)
+    local data = {
+        [utf8.char(1)] = {
+            [utf8.char(0)] = self:EncodeRageCFrame(look),
+            [utf8.char(1)] = self:EncodeRageCFrame(look),
+            [utf8.char(2)] = hitPart,
+            [utf8.char(3)] = self:EncodeRageCFrame(CFrame.new(0.43, 0.25, 0.42)),
+        },
+    }
+
+    local attempts = math.clamp(math.floor(tonumber(self.Config.RageShootAttempts) or 1), 1, 3)
+    local fired = false
+    local lastError = nil
+
+    for _ = 1, attempts do
+        local ok, err = pcall(function()
+            remote:FireServer(objectId, startShooting, data, nil)
+        end)
+        if ok then
+            fired = true
+        else
+            lastError = err
+        end
+    end
+
+    if fired then
+        self.State.RageLastShot = os.clock()
+        self.State.RageLastFireError = nil
+        return true, "firing"
+    end
+
+    self.State.RageLastFireError = tostring(lastError)
+    return false, "fire error"
+end
+
+function S:UpdateRage(dt)
+    if not self.Config.RageEnabled then
+        if self.State.RageTarget then
+            self:ClearRageTarget()
+        end
+        self.State.RageLastStatus = "off"
+        return
+    end
+
+    if self.Config.RageMatchOnly and not self:IsActiveMatch() then
+        self:ClearRageTarget()
+        self.State.RageLastStatus = "waiting match"
+        return
+    end
+
+    if not self:IsAlive() then
+        self:ClearRageTarget()
+        self.State.RageLastStatus = "waiting fighter"
+        return
+    end
+
+    local target = self.State.RageTarget
+    local valid = target and self:IsValidRageTarget(target)
+
+    if valid and self.Config.RageRespectImmune
+        and self:IsTargetImmune(self.State.RageTargetPlayer, target) then
+        self.State.RageLastStatus = "target immune"
+        if not self.Config.RageStickyTarget and self.Config.RageAutoTarget then
+            self:ClearRageTarget()
+            target = nil
+            valid = false
+        end
+    end
+
+    if self.Config.RageAutoTarget then
+        if not valid or not self.Config.RageStickyTarget then
+            target = self:AcquireRageTarget(false)
+            valid = target and self:IsValidRageTarget(target)
+        end
+    elseif not valid then
+        self:ClearRageTarget()
+        target = nil
+    end
+
+    if not target then
+        self.State.RageLastStatus = "searching"
+        return
+    end
+
+    local hum = target:FindFirstChildOfClass("Humanoid")
+    self.State.RageLastTargetName = self.State.RageTargetPlayer and self.State.RageTargetPlayer.Name or target.Name
+    self.State.RageLastTargetHP = hum and hum.Health or 0
+
+    if self.Config.RageVoidSync and self.Config.Enabled and self.State.Phase == "hide" then
+        self.State.RageLastStatus = "void hide"
+        return
+    end
+
+    if self.Config.RageForceWeapon then
+        self:EquipRageWeapon()
+    end
+
+    if self.Config.RageAutoShoot then
+        local fired, status = self:FireRageShot()
+        self.State.RageLastStatus = status or (fired and "firing" or "ready")
+    else
+        self.State.RageLastStatus = "locked"
+    end
+end
+
 function S:GetSpinRotation(dt, serverPulse)
     if not self.Config.SpinEnabled then return nil end
     if self.Config.SpinOnlyWhileVoid and self.State.Phase ~= "hide" then return nil end
@@ -899,7 +1811,7 @@ function S:BuildGui()
     self.Controls = {}
     self.ControlRefreshers = {}
 
-    local names = { "void", "spin", "misc" }
+    local names = { "rage", "void", "spin", "misc" }
     for i, name in ipairs(names) do
         local button = self:Create("TextButton", {
             Parent = tabBar,
@@ -959,10 +1871,11 @@ function S:BuildGui()
     end
 
     self:MakeDraggable(header, main)
+    self:BuildRageTab(self.Tabs.rage.page)
     self:BuildVoidTab(self.Tabs.void.page)
     self:BuildSpinTab(self.Tabs.spin.page)
     self:BuildMiscTab(self.Tabs.misc.page)
-    self:SelectTab("void")
+    self:SelectTab("rage")
     self:RefreshAllControls()
 end
 
@@ -1247,6 +2160,66 @@ function S:AddButton(parent, text, callback, risky)
     return row
 end
 
+
+function S:AddInfoRow(parent, text)
+    local row = self:Row(parent, 28)
+    local label = self:MakeText(row, text or "", 11, 7)
+    label.Position = UDim2.fromOffset(8, 0)
+    label.Size = UDim2.new(1, -16, 1, 0)
+    label.TextColor3 = Color3.fromRGB(165, 165, 165)
+    return row, label
+end
+
+function S:BuildRageTab(page)
+    self:AddSection(page, "rage bot")
+    self:AddToggle(page, "RageEnabled", "rage bot", function(on)
+        if on then
+            self:RefreshCombatModules()
+            self:AcquireRageTarget(true)
+        else
+            self:ClearRageTarget()
+        end
+    end)
+    self:AddCycle(page, "RageKey", "toggle key", { "R", "F", "Q", "E", "Y", "U", "None" })
+    self:AddToggle(page, "RageAutoTarget", "auto target")
+    self:AddToggle(page, "RageAutoShoot", "auto shoot")
+    self:AddCycle(page, "RageTargetMode", "target mode", { "Cursor", "Distance", "Lowest HP", "Random" })
+    self:AddCycle(page, "RageHitPart", "hit part", { "Head", "HumanoidRootPart", "UpperTorso", "Torso", "Closest", "Random" })
+    self:AddSlider(page, "RageFOV", "cursor target radius", 0, 1500, 25, "px")
+    self:AddSlider(page, "RageMaxDistance", "max target distance", 0, 5000, 50, "st")
+    self:AddToggle(page, "RageRequireOnScreen", "require on screen")
+    self:AddToggle(page, "RageStickyTarget", "sticky target")
+    self:AddSlider(page, "RageReacquireDelay", "reacquire delay", 0.01, 0.50, 0.01, "s")
+    self:AddToggle(page, "RageTeamCheck", "team check")
+    self:AddToggle(page, "RageRespectImmune", "respect immunity")
+    self:AddToggle(page, "RageMatchOnly", "only in active match")
+
+    self:AddSection(page, "weapon / fire")
+    self:AddCycle(page, "RageWeaponPick", "weapon", { "Primary", "Secondary", "Melee", "Current" }, function()
+        self.State.RageLastEquip = 0
+    end)
+    self:AddToggle(page, "RageForceWeapon", "force selected weapon")
+    self:AddSlider(page, "RageShootAttempts", "shoot attempts", 1, 3, 1, "x")
+    self:AddSlider(page, "RageShotInterval", "shot interval", 0.01, 0.30, 0.01, "s")
+    self:AddCycle(page, "RageOrigin", "shot origin", { "Visible", "Root", "Muzzle" })
+
+    self:AddSection(page, "prediction / void")
+    self:AddToggle(page, "RagePrediction", "rage prediction")
+    self:AddSlider(page, "RagePredictionScale", "rage prediction scale", 0, 2.5, 0.05, "x")
+    self:AddToggle(page, "RageVoidSync", "pause fire while void hidden")
+
+    self:AddSection(page, "target")
+    local _, targetLabel = self:AddInfoRow(page, "target: -")
+    self.RageTargetLabel = targetLabel
+    self:AddButton(page, "retarget now", function()
+        self:AcquireRageTarget(true)
+    end)
+    self:AddButton(page, "clear target", function()
+        self:ClearRageTarget()
+        self.State.RageLastStatus = "cleared"
+    end)
+end
+
 function S:BuildVoidTab(page)
     self:AddSection(page, "void spam")
     self:AddToggle(page, "Enabled", "void spam", function(on)
@@ -1323,8 +2296,8 @@ function S:BuildMiscTab(page)
     self:AddButton(page, "copy visible-origin api name", function()
         if setclipboard then pcall(setclipboard, "getgenv().DevKageVoidOrigin()") end
     end)
-    self:AddButton(page, "force fighter refresh", function()
-        self:RefreshFighterController()
+    self:AddButton(page, "force combat refresh", function()
+        self:RefreshCombatModules()
     end)
     self:AddButton(page, "reset settings", function()
         self:ResetConfig()
@@ -1360,21 +2333,36 @@ function S:UpdateUi(dt)
     if self.StatusLabel then
         if not self.Config.ShowStatus then
             self.StatusLabel.Text = ""
-            return
+        else
+            local ping = math.floor(self:GetPing() * 1000 + 0.5)
+            local mask = (ENV.__DevKageMaskShard and "mask:on") or "mask:off"
+            local phase = self.Config.Enabled and self.State.Phase or "off"
+            local spin = self.Config.SpinEnabled and self.Config.SpinMode or "off"
+            local rage = self.Config.RageEnabled and (self.State.RageLastStatus or "on") or "off"
+            self.StatusLabel.Text = string.format(
+                "rage:%s | void:%s | spin:%s | %dms | %s | root:%s",
+                rage,
+                phase,
+                spin,
+                ping,
+                mask,
+                self.State.FighterSource or "?"
+            )
         end
-        local ping = math.floor(self:GetPing() * 1000 + 0.5)
-        local mask = (ENV.__DevKageMaskShard and "mask:on") or "mask:off"
-        local menu = self.State.MainMenuLinked and "ui:linked" or "ui:standalone"
-        local phase = self.Config.Enabled and self.State.Phase or "off"
-        local spin = self.Config.SpinEnabled and self.Config.SpinMode or "off"
-        self.StatusLabel.Text = string.format(
-            "void:%s | spin:%s | %dms | %s | %s | root:%s",
-            phase,
-            spin,
-            ping,
-            mask,
-            menu,
-            self.State.FighterSource or "?"
+    end
+
+    if self.RageTargetLabel then
+        local target = self.State.RageTarget
+        local targetName = self.State.RageLastTargetName or "-"
+        local hp = tonumber(self.State.RageLastTargetHP) or 0
+        local immune = target and self.Config.RageRespectImmune
+            and self:IsTargetImmune(self.State.RageTargetPlayer, target)
+        self.RageTargetLabel.Text = string.format(
+            "target: %s | %.0f hp | %s%s",
+            targetName,
+            hp,
+            tostring(self.State.RageLastStatus or "idle"),
+            immune and " | immune" or ""
         )
     end
 end
@@ -1385,6 +2373,21 @@ function S:HandleKey(input, processed)
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
 
     local name = input.KeyCode.Name
+
+    if self.Config.RageKey ~= "None" and name == self.Config.RageKey then
+        self.Config.RageEnabled = not self.Config.RageEnabled
+        if self.Config.RageEnabled then
+            self:RefreshCombatModules()
+            self:AcquireRageTarget(true)
+        else
+            self:ClearRageTarget()
+            self.State.RageLastStatus = "off"
+        end
+        self:SaveConfig()
+        self:RefreshAllControls()
+        return
+    end
+
     if self.Config.VoidKey ~= "None" and name == self.Config.VoidKey then
         self.Config.Enabled = not self.Config.Enabled
         if self.Config.Enabled then self:SetPhase("attack") else self:ResetVoidState(true) end
@@ -1409,9 +2412,14 @@ end
 function S:OnCharacterAdded()
     self:ResetVoidState(false)
     self:RestoreAutoRotate()
+    self:ClearRageTarget()
+    self.State.RageLastStatus = self.Config.RageEnabled and "respawn" or "off"
     task.delay(0.5, function()
         if not self.Running then return end
-        self:RefreshFighterController()
+        self:RefreshCombatModules()
+        if self.Config.RageEnabled and self.Config.RageAutoTarget then
+            self:AcquireRageTarget(true)
+        end
     end)
 end
 
@@ -1423,6 +2431,9 @@ function S:RegisterMaskShard()
     end
     mask.Runtime.VoidSuite = self
     mask.Runtime.VoidPrediction = self.MaskPredictionExport
+    if self.RageExport then
+        mask.Runtime.RageBot = self.RageExport
+    end
 end
 
 function S:UnregisterMaskShard()
@@ -1431,6 +2442,9 @@ function S:UnregisterMaskShard()
         if mask.Runtime.VoidSuite == self then mask.Runtime.VoidSuite = nil end
         if mask.Runtime.VoidPrediction == self.MaskPredictionExport then
             mask.Runtime.VoidPrediction = nil
+        end
+        if mask.Runtime.RageBot == self.RageExport then
+            mask.Runtime.RageBot = nil
         end
     end
     self.MaskPredictionExport = nil
@@ -1441,6 +2455,7 @@ function S:StartLoops()
         if not self.Running then return end
         local ok, err = pcall(function()
             self:UpdateVoid(dt or 0)
+            self:UpdateRage(dt or 0)
         end)
         if not ok then
             self.State.LastError = tostring(err)
@@ -1473,6 +2488,7 @@ function S:Unload(reason)
     self.Running = false
     pcall(function() self:RestoreLocal(true) end)
     pcall(function() self:RestoreAutoRotate() end)
+    pcall(function() self:ClearRageTarget() end)
     self:UnbindAll()
     self:DisconnectAll()
     self:UnregisterMaskShard()
@@ -1490,6 +2506,9 @@ function S:Unload(reason)
     end
     if ENV.DevKageVoidOrigin == self.OriginExport then
         ENV.DevKageVoidOrigin = nil
+    end
+    if ENV.DevKageRageBot == self.RageExport then
+        ENV.DevKageRageBot = nil
     end
 end
 
@@ -1521,7 +2540,7 @@ function S:Init()
         if playerScripts then
             playerScripts:WaitForChild("Controllers", 8)
         end
-        self:RefreshFighterController()
+        self:RefreshCombatModules()
     end)
 
     self:BootStep("ui", function()
@@ -1539,8 +2558,21 @@ function S:Init()
         self.OriginExport = function()
             return self:GetVisibleOrigin()
         end
+        self.RageExport = {
+            Acquire = function(force) return self:AcquireRageTarget(force == true) end,
+            Clear = function() return self:ClearRageTarget() end,
+            Fire = function() return self:FireRageShot() end,
+            GetTarget = function() return self.State.RageTarget end,
+            Predict = function(part, origin) return self:PredictRagePart(part, origin or self:GetRageOrigin()) end,
+            GetStatus = function() return self.State.RageLastStatus end,
+            Suite = self,
+        }
         ENV.DevKageVoidPredict = self.PredictionExport
         ENV.DevKageVoidOrigin = self.OriginExport
+        ENV.DevKageRageBot = self.RageExport
+
+        -- MaskShard may have appeared after the first registration pass.
+        self:RegisterMaskShard()
     end)
 
     self:BootStep("signals", function()
