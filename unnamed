@@ -1,9 +1,9 @@
 --[[
-    DevKage Void Suite Companion v1.3
+    DevKage Void Suite Companion v1.4
     Standalone / coexistence-first companion for DevKage + MaskShard.
 
     Goals:
-      * Shared-state HvH core: rage, silent aim, void, server-origin prediction and anti-aim.
+      * Shared-state HvH core: duel-aware rage, adaptive silent aim, void, server-origin prediction and anti-aim.
       * Void spam with local visual restore.
       * Void/self prediction + reusable target prediction API.
       * Coexistence-first anti-aim/spinbot without replacing CameraController or weapon-module functions.
@@ -39,7 +39,7 @@ end
 
 local S = {
     Name = "DevKage Void Suite",
-    Version = "1.3.0",
+    Version = "1.4.0",
     Running = true,
     Ready = false,
     Connections = {},
@@ -113,6 +113,13 @@ S.Defaults = {
     RageTeamCheck = true,
     RageRespectImmune = true,
     RageMatchOnly = false,
+    RageDuelTeamCheck = true,
+    RageDeflectCheck = true,
+    RageKnifeAware = true,
+    RagePayloadMode = "Adaptive", -- Adaptive alternates target-CF and legacy payloads
+    RageUncappedFire = false,
+    RageFireDuringHide = false,
+    RageHitJitter = 0.05,
     RageHitPart = "Head",
     RageWeaponPick = "Primary",
     RageAttackMode = "Auto",
@@ -129,6 +136,9 @@ S.Defaults = {
     RageAttackPosition = "Current",
     RageAttackForward = 2.0,
     RageAttackHeight = 0.0,
+    RageThreatForward = 2.0,
+    RageThreatHeight = 1.0,
+    RageKnifeThreatHeight = 6.0,
     RageOrbitRadius = 0.0,
     RageOrbitSpeed = 7.0,
 
@@ -143,6 +153,9 @@ S.Defaults = {
     SilentRequireOnScreen = true,
     SilentTeamCheck = true,
     SilentRespectImmune = true,
+    SilentDeflectCheck = true,
+    SilentPayloadMode = "Adaptive",
+    SilentHitJitter = 0.04,
     SilentHitChance = 100,
     SilentHitPart = "Head",
     SilentPrediction = true,
@@ -285,7 +298,7 @@ S.State = {
 }
 
 S.ConfigFolder = "DevKage_Configs"
-S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion_v1_3.json"
+S.ConfigPath = S.ConfigFolder .. "/_void_suite_companion_v1_4.json"
 S.LegacyConfigPath = S.ConfigFolder .. "/_void_suite_companion.json"
 
 function S:Track(connection)
@@ -463,6 +476,12 @@ function S:RefreshCombatModules()
     local mechanics = self:SafeRequireModule(mechanicsRef, 2)
     if mechanics then
         self.State.MechanicsController = mechanics
+    end
+
+    local spectateRef = controllers and controllers:FindFirstChild("SpectateController")
+    local spectate = self:SafeRequireModule(spectateRef, 2)
+    if spectate then
+        self.State.SpectateController = spectate
     end
 end
 
@@ -1030,20 +1049,148 @@ function S:IsActiveMatch()
     return false
 end
 
+function S:GetDuelTeamId(targetPlayer)
+    if not targetPlayer then return nil end
+    if not self.Config.RageDuelTeamCheck then return nil end
+
+    local spectate = self.State.SpectateController
+    local duel = spectate and spectate.CurrentDuelSubject
+    if not duel or type(duel.GetDueler) ~= "function" then return nil end
+
+    local ok, dueler = pcall(duel.GetDueler, duel, targetPlayer)
+    if not ok or not dueler then return nil end
+
+    local team
+    pcall(function()
+        if type(dueler.Get) == "function" then
+            team = dueler:Get("TeamID")
+        else
+            team = dueler.TeamID
+        end
+    end)
+    return team
+end
+
 function S:IsTeammate(targetPlayer)
     if not targetPlayer or targetPlayer == self.Player then return true end
     if not self.Config.RageTeamCheck then return false end
 
-    local myTeamId = self.Player and self.Player:GetAttribute("TeamID")
-    local theirTeamId = targetPlayer:GetAttribute("TeamID")
-    if myTeamId ~= nil and theirTeamId ~= nil and myTeamId == theirTeamId then
-        return true
+    -- Prefer the game's duel team mapping. This is more reliable in HvH/duel instances
+    -- than Player.Team or stale TeamID attributes.
+    local myDuelTeam = self:GetDuelTeamId(self.Player)
+    local theirDuelTeam = self:GetDuelTeamId(targetPlayer)
+    if myDuelTeam ~= nil and theirDuelTeam ~= nil then
+        return myDuelTeam == theirDuelTeam
     end
 
-    if self.Player and self.Player.Team and targetPlayer.Team and self.Player.Team == targetPlayer.Team then
-        return true
+    local myTeamId = self.Player and self.Player:GetAttribute("TeamID")
+    local theirTeamId = targetPlayer:GetAttribute("TeamID")
+    if myTeamId ~= nil and theirTeamId ~= nil then
+        return myTeamId == theirTeamId
+    end
+
+    if self.Player and self.Player.Team and targetPlayer.Team then
+        return self.Player.Team == targetPlayer.Team
     end
     return false
+end
+
+function S:UpdateDeflectionState()
+    self.State.Deflecting = self.State.Deflecting or setmetatable({}, { __mode = "k" })
+    local cache = self.State.Deflecting
+    local fc = self.State.FighterController
+    if not fc then return end
+
+    local objects = fc.Objects or fc.Fighters or fc.AllFighters
+    if type(objects) ~= "table" then return end
+
+    for _, fighterObj in pairs(objects) do
+        local targetPlayer = fighterObj and fighterObj.Player
+        if targetPlayer then
+            local alive = true
+            pcall(function()
+                if fighterObj.Entity and type(fighterObj.Entity.IsAlive) == "function" then
+                    alive = fighterObj.Entity:IsAlive()
+                end
+                if type(fighterObj.Get) == "function" and fighterObj:Get("IsSpectating") then
+                    alive = false
+                end
+            end)
+
+            if not alive then
+                cache[targetPlayer] = false
+            else
+                local equipped = fighterObj.EquippedItem
+                local isKatana = false
+                local cooldown = nil
+                if equipped then
+                    pcall(function()
+                        local vm = equipped.ViewModel
+                        isKatana = (vm and tostring(vm.Name) == "Katana")
+                            or tostring(equipped.Name or "") == "Katana"
+                            or tostring(self:ItemGet(equipped, "Name") or "") == "Katana"
+                        cooldown = tonumber(equipped._attack_cooldown)
+                    end)
+                end
+                cache[targetPlayer] = isKatana and cooldown ~= nil and cooldown > tick() or false
+            end
+        end
+    end
+end
+
+function S:IsTargetDeflecting(targetPlayer)
+    if not targetPlayer then return false end
+    self.State.Deflecting = self.State.Deflecting or setmetatable({}, { __mode = "k" })
+    local cached = self.State.Deflecting[targetPlayer]
+    if cached ~= nil then return cached == true end
+
+    local fc = self.State.FighterController
+    if fc and type(fc.GetFighter) == "function" then
+        local ok, fighterObj = pcall(fc.GetFighter, fc, targetPlayer)
+        if ok and fighterObj then
+            local equipped = fighterObj.EquippedItem
+            local isKatana = false
+            local cooldown
+            pcall(function()
+                local vm = equipped and equipped.ViewModel
+                isKatana = equipped and ((vm and tostring(vm.Name) == "Katana") or tostring(equipped.Name or "") == "Katana")
+                cooldown = equipped and tonumber(equipped._attack_cooldown)
+            end)
+            return isKatana and cooldown ~= nil and cooldown > tick() or false
+        end
+    end
+    return false
+end
+
+function S:HasKnifeViewModel(targetPlayer)
+    if not targetPlayer then return false end
+    local viewModels = self.Services.Workspace:FindFirstChild("ViewModels")
+    if not viewModels then return false end
+    local targetName = tostring(targetPlayer.Name or "")
+    for _, model in ipairs(viewModels:GetChildren()) do
+        if model:IsA("Model") then
+            local name = tostring(model.Name or "")
+            if string.find(name, targetName, 1, true) and string.find(string.lower(name), "knife", 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function S:BuildThreatCFrame(targetPlayer, targetRoot, targetHead)
+    if not targetRoot then return nil end
+    targetHead = targetHead or targetRoot
+    local pos
+    if self.Config.RageKnifeAware and self:HasKnifeViewModel(targetPlayer) then
+        local y = tonumber(self.Config.RageKnifeThreatHeight) or 6
+        pos = (targetRoot.CFrame * CFrame.new(0, y, 0)).Position
+    else
+        local y = tonumber(self.Config.RageThreatHeight) or 1
+        local z = tonumber(self.Config.RageThreatForward) or 2
+        pos = (targetRoot.CFrame * CFrame.new(0, y, z)).Position
+    end
+    return CFrame.lookAt(pos, targetHead.Position)
 end
 
 function S:IsTargetImmune(targetPlayer, char)
@@ -1054,14 +1201,11 @@ function S:IsTargetImmune(targetPlayer, char)
         return true
     end
 
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if root and root:FindFirstChild("Attachment") then
-        return true
-    end
-
+    -- Do not treat ordinary HumanoidRootPart attachments as immunity; almost every
+    -- normal character can have attachments and v1.3 could therefore reject valid targets.
     for _, key in ipairs({
         "Invulnerable", "Immune", "IsImmune", "GodMode", "SpawnProtected",
-        "Protected", "InSafeZone"
+        "Protected", "InSafeZone", "IsSpawnProtected"
     }) do
         local a = char:GetAttribute(key)
         local b = targetPlayer and targetPlayer:GetAttribute(key)
@@ -1090,6 +1234,18 @@ function S:WorldToScreen(position)
     return Vector2.new(point.X, point.Y), visible == true and point.Z > 0
 end
 
+function S:GetTargetingOrigin()
+    local cf = self.State.LocalRestoreCF or self.State.VisibleCF
+    if cf then return cf.Position end
+
+    local char = self:GetCharacter()
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then return root.Position end
+
+    local camera = self.Services.Workspace.CurrentCamera
+    return camera and camera.CFrame.Position or Vector3.zero
+end
+
 function S:IsValidRageTarget(char)
     if not char or not char.Parent then return false end
     local hum = char:FindFirstChildOfClass("Humanoid")
@@ -1100,9 +1256,9 @@ function S:IsValidRageTarget(char)
     if not targetPlayer or targetPlayer == self.Player then return false end
     if self:IsTeammate(targetPlayer) then return false end
 
-    local myRoot = self:GetRoot()
+    local localPos = self:GetTargetingOrigin()
     local maxDistance = math.max(tonumber(self.Config.RageMaxDistance) or 2500, 0)
-    if maxDistance > 0 and myRoot and (root.Position - myRoot.Position).Magnitude > maxDistance then
+    if maxDistance > 0 and localPos and (root.Position - localPos).Magnitude > maxDistance then
         return false
     end
 
@@ -1156,8 +1312,8 @@ function S:ScoreRageTarget(char)
         local hum = char:FindFirstChildOfClass("Humanoid")
         return hum and hum.Health or math.huge
     elseif mode == "Distance" then
-        local myRoot = self:GetRoot()
-        return myRoot and (root.Position - myRoot.Position).Magnitude or math.huge
+        local localPos = self:GetTargetingOrigin()
+        return localPos and (root.Position - localPos).Magnitude or math.huge
     elseif mode == "Random" then
         return math.random()
     end
@@ -1227,14 +1383,20 @@ function S:IsSilentTeammate(targetPlayer)
     if not targetPlayer or targetPlayer == self.Player then return true end
     if not self.Config.SilentTeamCheck then return false end
 
-    local myTeamId = self.Player and self.Player:GetAttribute("TeamID")
-    local theirTeamId = targetPlayer:GetAttribute("TeamID")
-    if myTeamId ~= nil and theirTeamId ~= nil and myTeamId == theirTeamId then
-        return true
+    local myDuelTeam = self:GetDuelTeamId(self.Player)
+    local theirDuelTeam = self:GetDuelTeamId(targetPlayer)
+    if myDuelTeam ~= nil and theirDuelTeam ~= nil then
+        return myDuelTeam == theirDuelTeam
     end
 
-    if self.Player and self.Player.Team and targetPlayer.Team and self.Player.Team == targetPlayer.Team then
-        return true
+    local myTeamId = self.Player and self.Player:GetAttribute("TeamID")
+    local theirTeamId = targetPlayer:GetAttribute("TeamID")
+    if myTeamId ~= nil and theirTeamId ~= nil then
+        return myTeamId == theirTeamId
+    end
+
+    if self.Player and self.Player.Team and targetPlayer.Team then
+        return self.Player.Team == targetPlayer.Team
     end
     return false
 end
@@ -1249,9 +1411,9 @@ function S:IsValidSilentTarget(char)
     if not targetPlayer or targetPlayer == self.Player then return false end
     if self:IsSilentTeammate(targetPlayer) then return false end
 
-    local myRoot = self:GetRoot()
+    local localPos = self:GetTargetingOrigin()
     local maxDistance = math.max(tonumber(self.Config.SilentMaxDistance) or 3000, 0)
-    if maxDistance > 0 and myRoot and (root.Position - myRoot.Position).Magnitude > maxDistance then
+    if maxDistance > 0 and localPos and (root.Position - localPos).Magnitude > maxDistance then
         return false
     end
 
@@ -1328,8 +1490,8 @@ function S:ScoreSilentTarget(char)
 
     local mode = tostring(self.Config.SilentTargetMode or "Cursor")
     if mode == "Distance" then
-        local myRoot = self:GetRoot()
-        return myRoot and (root.Position - myRoot.Position).Magnitude or math.huge
+        local localPos = self:GetTargetingOrigin()
+        return localPos and (root.Position - localPos).Magnitude or math.huge
     elseif mode == "Lowest HP" then
         local hum = char:FindFirstChildOfClass("Humanoid")
         return hum and hum.Health or math.huge
@@ -1549,6 +1711,26 @@ function S:ToGameEnum(name)
     return ok and value or nil
 end
 
+function S:MaintainRageWeapon()
+    if not self.Config.RageEnabled or not self.Config.RageForceWeapon then return end
+    local now = os.clock()
+    if now - (self.State.RageLastMaintain or 0) < 0.75 then return end
+    self.State.RageLastMaintain = now
+
+    local slot = self:GetDesiredRageSlot()
+    if not slot then return end
+    local lf = self:GetLocalFighter()
+    if not lf then return end
+
+    pcall(function()
+        if type(lf.EquipItem) == "function" then
+            lf:EquipItem(slot)
+        elseif type(lf.SwitchToSlot) == "function" then
+            lf:SwitchToSlot(slot)
+        end
+    end)
+end
+
 function S:EquipRageWeapon()
     if not self.Config.RageForceWeapon then return true end
 
@@ -1685,6 +1867,18 @@ function S:GetCombatOrigin(mode)
     -- then visible/root. This is the coexistence path.
     local observed = self:GetObservedServerOrigin()
     if observed then return observed end
+
+    if self.Config.RageEnabled and tostring(self.Config.RageAttackPosition or "Current") == "Threat" then
+        local target = self.State.RageTarget
+        local targetPlayer = self.State.RageTargetPlayer
+        if self:IsValidRageTarget(target) then
+            local targetRoot = target:FindFirstChild("HumanoidRootPart")
+            local targetHead = target:FindFirstChild("Head") or targetRoot
+            local threatCF = self:BuildThreatCFrame(targetPlayer, targetRoot, targetHead)
+            if threatCF then return threatCF.Position end
+        end
+    end
+
     local muzzle = self:GetMuzzlePosition()
     if muzzle and not self.Config.Enabled and not self.State.ExternalDetected then
         return muzzle
@@ -1801,7 +1995,8 @@ function S:CanRageFire()
         return false, "off"
     end
 
-    if self.Config.RageVoidSync and self.Config.Enabled and self.State.Phase == "hide" then
+    if self.Config.RageVoidSync and not self.Config.RageFireDuringHide
+        and self.Config.Enabled and self.State.Phase == "hide" then
         return false, "void hide"
     end
 
@@ -1809,40 +2004,79 @@ function S:CanRageFire()
     if not item then return false, "no weapon" end
 
     local current, _, melee, reloading = self:GetRageAmmo()
-    if reloading then return false, "reloading" end
+    if reloading and not self.Config.RageUncappedFire then return false, "reloading" end
     if not melee and current ~= nil and current <= 0 then return false, "no ammo" end
 
-    local interval = math.max(tonumber(self.Config.RageShotInterval) or 0.05, 0.01)
-    if self.Config.RageUseWeaponCooldown then
-        interval = math.max(interval, self:GetWeaponCooldown())
-    end
-    if self.Config.RagePingGate then
-        interval = math.max(interval, math.min(self:GetPing() * 0.35, 0.12))
+    local interval = math.max(tonumber(self.Config.RageShotInterval) or 0.05, 0.0005)
+    if not self.Config.RageUncappedFire then
+        if self.Config.RageUseWeaponCooldown then
+            interval = math.max(interval, self:GetWeaponCooldown())
+        end
+        if self.Config.RagePingGate then
+            interval = math.max(interval, math.min(self:GetPing() * 0.35, 0.12))
+        end
     end
 
     local now = os.clock()
     if now - (self.State.RageLastShot or 0) < interval then
         return false, "cooldown"
     end
-    if now - (self.State.LastCombatShot or 0) < math.min(interval, 0.05) then
+    if now - (self.State.LastCombatShot or 0) < math.min(interval, 0.008) then
         return false, "shared cooldown"
     end
 
     return true, "ready"
 end
 
-function S:BuildShotData(hitPart, origin, targetPos)
+function S:BuildShotData(hitPart, origin, targetPos, mode, jitterAmount)
     if not hitPart or not origin or not targetPos then return nil end
-    local look = CFrame.new(origin, targetPos)
+    mode = tostring(mode or "TargetCF")
+    jitterAmount = math.max(tonumber(jitterAmount) or 0, 0)
+
+    local aimedPos = targetPos
+    if jitterAmount > 0 then
+        aimedPos = targetPos + Vector3.new(
+            (math.random() - 0.5) * jitterAmount * 2,
+            (math.random() - 0.5) * jitterAmount * 2,
+            (math.random() - 0.5) * jitterAmount * 2
+        )
+    end
+
+    local aimCF = CFrame.lookAt(origin, targetPos)
+    if mode == "Legacy" then
+        return {
+            [utf8.char(1)] = {
+                [utf8.char(0)] = self:EncodeRageCFrame(aimCF),
+                [utf8.char(1)] = self:EncodeRageCFrame(aimCF),
+                [utf8.char(2)] = hitPart,
+                [utf8.char(3)] = self:EncodeRageCFrame(CFrame.new(0.43, 0.25, 0.42)),
+            },
+        }
+    end
+
+    -- TargetCF payload mirrors the working script supplied by the user:
+    -- aim CFrame, real target-part CFrame, target instance, object-space hit offset.
+    local targetCF = hitPart.CFrame
+    local objectSpaceOffset = targetCF:ToObjectSpace(CFrame.new(aimedPos))
     return {
         [utf8.char(1)] = {
-            [utf8.char(0)] = self:EncodeRageCFrame(look),
-            [utf8.char(1)] = self:EncodeRageCFrame(look),
+            [utf8.char(0)] = self:EncodeRageCFrame(aimCF),
+            [utf8.char(1)] = self:EncodeRageCFrame(targetCF),
             [utf8.char(2)] = hitPart,
-            [utf8.char(3)] = self:EncodeRageCFrame(CFrame.new(0.43, 0.25, 0.42)),
+            [utf8.char(3)] = self:EncodeRageCFrame(objectSpaceOffset),
         },
     }
 end
+
+function S:ResolvePayloadMode(configured, attemptIndex)
+    configured = tostring(configured or "Adaptive")
+    if configured == "Adaptive" or configured == "Dual" then
+        return (attemptIndex or 1) % 2 == 1 and "TargetCF" or "Legacy"
+    end
+    if configured ~= "Legacy" then return "TargetCF" end
+    return "Legacy"
+end
+
 
 function S:FireRageShot()
     local target = self.State.RageTarget
@@ -1853,6 +2087,9 @@ function S:FireRageShot()
     local targetPlayer = self.State.RageTargetPlayer
     if self.Config.RageRespectImmune and self:IsTargetImmune(targetPlayer, target) then
         return false, "immune"
+    end
+    if self.Config.RageDeflectCheck and self:IsTargetDeflecting(targetPlayer) then
+        return false, "katana deflect"
     end
 
     if self.Config.RageForceWeapon then
@@ -1880,37 +2117,36 @@ function S:FireRageShot()
         actionName = "StartAiming"
     end
 
-    local startShooting = self:ToGameEnum(actionName)
-    if startShooting == nil then
+    local actionEnum = self:ToGameEnum(actionName)
+    if actionEnum == nil then
         self:RefreshCombatModules()
-        startShooting = self:ToGameEnum(actionName)
+        actionEnum = self:ToGameEnum(actionName)
     end
-    if startShooting == nil then return false, "enum" end
+    if actionEnum == nil then return false, "enum" end
 
     local remote = self:GetUseItemRemote()
     if not remote then return false, "remote" end
 
-    local data = self:BuildShotData(hitPart, origin, targetPos)
-    if not data then return false, "payload" end
-
     if self.Config.RageInputAssist then
-        pcall(function()
-            self:SyncWeaponInput(actionName)
-        end)
+        pcall(function() self:SyncWeaponInput(actionName) end)
     end
 
     local attempts = math.clamp(math.floor(tonumber(self.Config.RageShootAttempts) or 1), 1, 3)
     local fired = false
     local lastError = nil
 
-    for _ = 1, attempts do
-        local ok, err = pcall(function()
-            remote:FireServer(objectId, startShooting, data, nil)
-        end)
-        if ok then
-            fired = true
-        else
-            lastError = err
+    for i = 1, attempts do
+        local mode = self:ResolvePayloadMode(self.Config.RagePayloadMode, i)
+        local data = self:BuildShotData(hitPart, origin, targetPos, mode, self.Config.RageHitJitter)
+        if data then
+            local ok, err = pcall(function()
+                remote:FireServer(objectId, actionEnum, data, nil)
+            end)
+            if ok then
+                fired = true
+            else
+                lastError = err
+            end
         end
     end
 
@@ -2077,6 +2313,9 @@ function S:FireSilentShot()
     if self.Config.SilentRespectImmune and self:IsTargetImmune(targetPlayer, target) then
         return false, "immune"
     end
+    if self.Config.SilentDeflectCheck and self:IsTargetDeflecting(targetPlayer) then
+        return false, "katana deflect"
+    end
 
     local canFire, reason = self:CanSilentFire()
     if not canFire then return false, reason end
@@ -2102,7 +2341,8 @@ function S:FireSilentShot()
     local remote = self:GetUseItemRemote()
     if not remote then return false, "remote" end
 
-    local data = self:BuildShotData(part, origin, targetPos)
+    local mode = self:ResolvePayloadMode(self.Config.SilentPayloadMode, math.random(1, 2))
+    local data = self:BuildShotData(part, origin, targetPos, mode, self.Config.SilentHitJitter)
     if not data then return false, "payload" end
 
     local ok, err = pcall(function()
@@ -2124,6 +2364,8 @@ function S:FireSilentShot()
 end
 
 function S:UpdateCombatFire(dt)
+    self:MaintainRageWeapon()
+    self:UpdateDeflectionState()
     local rageReady = self:UpdateRageTarget(dt)
     local silentReady = self:UpdateSilentTarget(dt)
 
@@ -2207,7 +2449,12 @@ function S:BuildRageAttackCFrame(root, dt)
     local forward = tonumber(self.Config.RageAttackForward) or 2
     local height = tonumber(self.Config.RageAttackHeight) or 0
 
-    if mode == "Under" then
+    if mode == "Threat" then
+        local targetPlayer = self.State.RageTargetPlayer
+        local targetRoot = target:FindFirstChild("HumanoidRootPart") or part
+        local targetHead = target:FindFirstChild("Head") or part
+        return self:BuildThreatCFrame(targetPlayer, targetRoot, targetHead) or visible
+    elseif mode == "Under" then
         return CFrame.new(predicted + Vector3.new(0, -math.abs(height ~= 0 and height or 3.5), 0))
     elseif mode == "Orbit" then
         self.State.RageOrbitAngle = (self.State.RageOrbitAngle or 0)
@@ -3070,7 +3317,14 @@ function S:AddSlider(parent, key, text, minValue, maxValue, step, suffix, callba
         self.Config[key] = value
         local frac = (value - minValue) / math.max(maxValue - minValue, 0.0001)
         fill.Size = UDim2.new(frac, 0, 1, 0)
-        local decimals = (step and step < 1) and 2 or 0
+        local decimals = 0
+        if step and step < 0.001 then
+            decimals = 4
+        elseif step and step < 0.01 then
+            decimals = 3
+        elseif step and step < 1 then
+            decimals = 2
+        end
         valueLabel.Text = string.format("%." .. decimals .. "f%s", value, suffix or "")
         if callback then pcall(callback, value) end
         if save then self:SaveConfig() end
@@ -3206,6 +3460,9 @@ function S:BuildRageTab(page)
     self:AddToggle(page, "RageTeamCheck", "team check")
     self:AddToggle(page, "RageRespectImmune", "respect immunity")
     self:AddToggle(page, "RageMatchOnly", "only in active match")
+    self:AddToggle(page, "RageDuelTeamCheck", "duel-aware team check")
+    self:AddToggle(page, "RageDeflectCheck", "skip katana deflect")
+    self:AddToggle(page, "RageKnifeAware", "knife-aware threat position")
 
     self:AddSection(page, "weapon / fire")
     self:AddCycle(page, "RageWeaponPick", "weapon", { "Primary", "Secondary", "Melee", "Current" }, function()
@@ -3214,16 +3471,23 @@ function S:BuildRageTab(page)
     self:AddCycle(page, "RageAttackMode", "attack mode", { "Auto", "Gun", "Melee", "Knife" })
     self:AddToggle(page, "RageForceWeapon", "force selected weapon")
     self:AddSlider(page, "RageShootAttempts", "shoot attempts", 1, 3, 1, "x")
-    self:AddSlider(page, "RageShotInterval", "minimum shot interval", 0.01, 0.30, 0.01, "s")
+    self:AddSlider(page, "RageShotInterval", "minimum shot interval", 0.0005, 0.30, 0.0005, "s")
+    self:AddToggle(page, "RageUncappedFire", "heartbeat / uncapped fire")
+    self:AddToggle(page, "RageFireDuringHide", "allow fire while void hidden")
+    self:AddCycle(page, "RagePayloadMode", "shot payload", { "Adaptive", "TargetCF", "Legacy" })
+    self:AddSlider(page, "RageHitJitter", "hit offset jitter", 0, 0.25, 0.01, "st")
     self:AddToggle(page, "RageUseWeaponCooldown", "respect weapon cooldown")
     self:AddToggle(page, "RagePingGate", "ping-aware fire gate")
     self:AddToggle(page, "RageInputAssist", "mechanics input assist")
     self:AddCycle(page, "RageOrigin", "shot origin", { "Auto", "Server", "Visible", "Root", "Muzzle" })
 
     self:AddSection(page, "server attack position")
-    self:AddCycle(page, "RageAttackPosition", "attack position", { "Current", "Target", "Under", "Orbit" })
+    self:AddCycle(page, "RageAttackPosition", "attack position", { "Current", "Threat", "Target", "Under", "Orbit" })
     self:AddSlider(page, "RageAttackForward", "target forward offset", -8, 8, 0.25, "st")
     self:AddSlider(page, "RageAttackHeight", "target height offset", -12, 12, 0.25, "st")
+    self:AddSlider(page, "RageThreatForward", "threat forward offset", -8, 8, 0.25, "st")
+    self:AddSlider(page, "RageThreatHeight", "threat height", -8, 12, 0.25, "st")
+    self:AddSlider(page, "RageKnifeThreatHeight", "knife threat height", 0, 16, 0.25, "st")
     self:AddSlider(page, "RageOrbitRadius", "orbit radius", 0, 12, 0.25, "st")
     self:AddSlider(page, "RageOrbitSpeed", "orbit speed", 0, 30, 0.5, "")
 
@@ -3266,6 +3530,9 @@ function S:BuildSilentTab(page)
     self:AddToggle(page, "SilentRequireOnScreen", "require on screen")
     self:AddToggle(page, "SilentTeamCheck", "team check")
     self:AddToggle(page, "SilentRespectImmune", "respect immunity")
+    self:AddToggle(page, "SilentDeflectCheck", "skip katana deflect")
+    self:AddCycle(page, "SilentPayloadMode", "shot payload", { "Adaptive", "TargetCF", "Legacy" })
+    self:AddSlider(page, "SilentHitJitter", "hit offset jitter", 0, 0.25, 0.01, "st")
 
     self:AddSection(page, "silent prediction")
     self:AddToggle(page, "SilentPrediction", "prediction")
@@ -3365,83 +3632,96 @@ function S:ApplyPreset(name)
     local c = self.Config
 
     if name == "Deadly Extreme" then
-        -- Aggressive combat values, but coexistence stays in Enhance mode so another
-        -- HvH script can keep its own root/server-CFrame writer without being overwritten.
+        -- v1.4 HvH preset: offensive target-relative desync first, short defensive void pulses,
+        -- direct heartbeat fire, duel-aware teams, katana deflect avoidance and adaptive payloads.
         c.CoexistenceMode = "Enhance"
-        c.CoexistenceBootDelay = 1.25
-        c.ExternalBackoff = 0.45
-        c.ExternalDesyncThreshold = 65
+        c.CoexistenceBootDelay = 1.00
+        c.ExternalBackoff = 0.20
+        c.ExternalDesyncThreshold = 50
         c.UseExternalServerOrigin = true
         c.RespectOtherMovement = true
 
         c.Enabled = true
-        c.AttackTime = 0.10
-        c.HideTime = 0.24
+        c.AttackTime = 0.15
+        c.HideTime = 0.06
         c.RandomTiming = true
-        c.TimingVariance = 0.10
+        c.TimingVariance = 0.06
         c.VoidMode = "Random"
         c.VoidDepth = 999999999
         c.VoidRange = 10000
         c.VelocityNoise = false
 
         c.VoidPrediction = true
-        c.PredictionMultiplier = 1.22
-        c.PredictionSmoothing = 0.58
-        c.PredictionMaxLead = 0.40
+        c.PredictionMultiplier = 1.15
+        c.PredictionSmoothing = 0.52
+        c.PredictionMaxLead = 0.30
         c.PingAssist = true
-        c.PingFactor = 1.05
+        c.PingFactor = 0.90
         c.ProjectileAssist = true
         c.ProjectileSpeed = 3000
-        c.MaxPredictionStuds = 28
+        c.MaxPredictionStuds = 22
 
         c.RageEnabled = true
         c.RageAutoTarget = true
         c.RageAutoShoot = true
         c.RageTargetMode = "Distance"
         c.RageFOV = 1800
-        c.RageMaxDistance = 6000
+        c.RageMaxDistance = 500
         c.RageRequireOnScreen = false
         c.RageStickyTarget = true
-        c.RageReacquireDelay = 0.03
+        c.RageReacquireDelay = 0.01
         c.RageTeamCheck = true
+        c.RageDuelTeamCheck = true
         c.RageRespectImmune = true
+        c.RageDeflectCheck = true
+        c.RageKnifeAware = true
         c.RageMatchOnly = false
         c.RageHitPart = "Head"
-        c.RageWeaponPick = "Primary"
+        c.RageWeaponPick = "Melee"
         c.RageAttackMode = "Auto"
-        c.RageForceWeapon = false
+        c.RageForceWeapon = true
         c.RageShootAttempts = 2
-        c.RageShotInterval = 0.02
-        c.RageUseWeaponCooldown = true
-        c.RagePingGate = true
-        c.RageInputAssist = true
+        c.RageShotInterval = 0.0005
+        c.RageUncappedFire = true
+        c.RageFireDuringHide = false
+        c.RageUseWeaponCooldown = false
+        c.RagePingGate = false
+        c.RageInputAssist = false
+        c.RagePayloadMode = "Adaptive"
+        c.RageHitJitter = 0.05
         c.RagePrediction = true
-        c.RagePredictionScale = 1.15
+        c.RagePredictionScale = 1.00
         c.RageVoidSync = true
         c.RageOrigin = "Auto"
-        c.RageAttackPosition = "Target"
+        c.RageAttackPosition = "Threat"
         c.RageAttackForward = 2
         c.RageAttackHeight = 0
+        c.RageThreatForward = 2
+        c.RageThreatHeight = 1
+        c.RageKnifeThreatHeight = 6
         c.RageOrbitRadius = 0
-        c.RageOrbitSpeed = 8
+        c.RageOrbitSpeed = 10
 
         c.SilentEnabled = true
         c.SilentAutoShoot = true
         c.SilentUseRageTarget = true
-        c.SilentTargetMode = "Cursor"
+        c.SilentTargetMode = "Distance"
         c.SilentFOV = 1800
-        c.SilentMaxDistance = 6000
+        c.SilentMaxDistance = 500
         c.SilentRequireOnScreen = false
         c.SilentTeamCheck = true
         c.SilentRespectImmune = true
+        c.SilentDeflectCheck = true
+        c.SilentPayloadMode = "Adaptive"
+        c.SilentHitJitter = 0.04
         c.SilentHitChance = 100
         c.SilentHitPart = "Head"
         c.SilentPrediction = true
-        c.SilentPredictionScale = 1.05
-        c.SilentShotInterval = 0.03
+        c.SilentPredictionScale = 1.00
+        c.SilentShotInterval = 0.01
         c.SilentOrigin = "Auto"
         c.SilentOnlyWhenMouseDown = false
-        c.SilentManipulation = true
+        c.SilentManipulation = false
         c.SilentManipulationForward = 5
         c.SilentManipulationHeight = 5
 
@@ -3449,16 +3729,15 @@ function S:ApplyPreset(name)
         c.AntiAimYaw = "Jitter"
         c.AntiAimYawAngle = 180
         c.AntiAimJitterAngle = 180
-        c.AntiAimSpeed = 42
+        c.AntiAimSpeed = 100
         c.AntiAimPitch = "Random"
         c.AntiAimPitchAngle = 89
         c.AntiAimRoll = "Sway"
-        c.AntiAimRollAngle = 28
+        c.AntiAimRollAngle = 35
         c.AntiAimOnlyCombat = true
         c.AntiAimOnlyAttack = false
         c.AntiAimUnderground = false
 
-        -- One network anti-aim layer is enough; leaving legacy spin off avoids double rotations.
         c.SpinEnabled = false
         c.CameraSafe = true
     elseif name == "Stable Coexist" then
@@ -3516,7 +3795,7 @@ function S:BuildMiscTab(page)
     self:AddToggle(page, "ShowStatus", "show runtime status")
 
     self:AddSection(page, "hvh presets")
-    self:AddButton(page, "apply DEADLY EXTREME (coexist)", function()
+    self:AddButton(page, "apply DEADLY EXTREME v2", function()
         self:ApplyPreset("Deadly Extreme")
     end, true)
     self:AddButton(page, "apply stable coexist", function()
@@ -3601,12 +3880,15 @@ function S:UpdateUi(dt)
         local hp = tonumber(self.State.RageLastTargetHP) or 0
         local immune = target and self.Config.RageRespectImmune
             and self:IsTargetImmune(self.State.RageTargetPlayer, target)
+        local deflect = target and self.Config.RageDeflectCheck
+            and self:IsTargetDeflecting(self.State.RageTargetPlayer)
         self.RageTargetLabel.Text = string.format(
-            "target: %s | %.0f hp | %s%s",
+            "target: %s | %.0f hp | %s%s%s",
             targetName,
             hp,
             tostring(self.State.RageLastStatus or "idle"),
-            immune and " | immune" or ""
+            immune and " | immune" or "",
+            deflect and " | deflect" or ""
         )
     end
 
@@ -3766,14 +4048,14 @@ function S:StartLoops()
 
     -- Probe before normal render-priority 0 restores. This catches another script
     -- that wrote its server CFrame after our PostSimulation callback.
-    self:Bind("DK_HVHCompanion_ExternalProbe", Enum.RenderPriority.First.Value - 100, function()
+    self:Bind("DK_HVHCompanion_ExternalProbe", 90, function()
         if not self.Running then return end
         self:PreRenderExternalProbe()
     end)
 
     -- Restore only frames that this companion itself wrote. If another script owns
     -- server CFrame, this does nothing and leaves that script's restore loop alone.
-    self:Bind("DK_HVHCompanion_LocalRestore", Enum.RenderPriority.First.Value, function()
+    self:Bind("DK_HVHCompanion_LocalRestore", 105, function()
         if not self.Running then return end
         if self.State.OwnRootFrame then
             self:RestoreOwnedLocal(false)
@@ -3866,6 +4148,13 @@ function S:Init()
             GetStatus = function() return self.State.RageLastStatus end,
             GetServerOrigin = function() return self:GetCombatOrigin("Auto") end,
             ApplyDeadlyPreset = function() return self:ApplyPreset("Deadly Extreme") end,
+            IsTargetDeflecting = function(_, player) return self:IsTargetDeflecting(player) end,
+            ThreatCFrame = function(_, player)
+                local char = player and player.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local head = char and (char:FindFirstChild("Head") or root)
+                return self:BuildThreatCFrame(player, root, head)
+            end,
             Suite = self,
         }
         self.SilentExport = {
